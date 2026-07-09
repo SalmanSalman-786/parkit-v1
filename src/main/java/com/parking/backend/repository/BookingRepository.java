@@ -7,6 +7,10 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
 
 public interface BookingRepository extends JpaRepository<Booking, String> {
 
@@ -25,6 +29,10 @@ public interface BookingRepository extends JpaRepository<Booking, String> {
         List<Booking> findByEntryTimeIsNullAndStartTimeBefore(LocalDateTime time);
 
         List<Booking> findByParkingId(String parkingId);
+
+        boolean existsByVehicleNumberAndStatusIn(
+                        String vehicleNumber,
+                        List<String> statuses);
 
         List<Booking> findByVehicleNumberAndStatus(
                         String vehicleNumber,
@@ -49,6 +57,10 @@ public interface BookingRepository extends JpaRepository<Booking, String> {
         List<Booking> findByParkingIdAndStatusIn(
                         String parkingId,
                         List<String> statuses);
+
+        List<Booking> findByParkingIdAndStatus(
+                        String parkingId,
+                        String status);
 
         List<Booking> findByParkingIdAndStatusOrderByStartTimeAsc(
                         String parkingId,
@@ -114,4 +126,62 @@ public interface BookingRepository extends JpaRepository<Booking, String> {
                         String vehicleType,
                         String type,
                         String status);
+
+        List<Booking> findByStatusAndReminderSentFalse(
+                        String status);
+
+        List<Booking> findByStatusAndExpiryAlertSentFalse(
+                        String status);
+
+        List<Booking> findByStatusAndStartNotificationSentFalse(
+                        String status);
+
+        Optional<Booking> findByRazorpayOrderId(String razorpayOrderId);
+
+        Optional<Booking> findByRazorpayPaymentId(String razorpayPaymentId);
+
+        @Query("""
+                        SELECT COUNT(b)
+                        FROM Booking b
+                        WHERE b.parkingId = :parkingId
+                        AND b.vehicleType = :vehicleType
+                        AND b.type <> :type
+                        AND b.status = :status
+                        AND b.startTime < :nextDay
+                        AND b.endTime >= :dayStart
+                        """)
+        long countBookingsOccupyingDate(
+                        @Param("parkingId") String parkingId,
+                        @Param("vehicleType") String vehicleType,
+                        @Param("type") String type,
+                        @Param("status") String status,
+                        @Param("dayStart") LocalDateTime dayStart,
+                        @Param("nextDay") LocalDateTime nextDay);
+
+        @Lock(LockModeType.PESSIMISTIC_WRITE)
+        @Query("""
+                        SELECT b
+                        FROM Booking b
+                        WHERE b.bookingId = :bookingId
+                        """)
+        Optional<Booking> findByBookingIdForUpdate(
+                        @Param("bookingId") String bookingId);
+
+        @Lock(LockModeType.PESSIMISTIC_WRITE)
+        @Query("""
+                        SELECT b
+                        FROM Booking b
+                        WHERE b.id = :id
+                        """)
+        Optional<Booking> findByIdForUpdate(
+                        @Param("id") String id);
+
+        Optional<Booking> findByPaymentLinkId(String paymentLinkId);
+        Optional<Booking> findByFineOrderId(String fineOrderId);
+
+        
+
+
+        
+
 }

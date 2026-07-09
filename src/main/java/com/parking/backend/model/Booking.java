@@ -6,11 +6,13 @@ import jakarta.persistence.*;
 
 import java.time.LocalDateTime;
 
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+
 @Data
 @Entity
-@Table(
-    name = "bookings",
-    indexes = {
+@Table(name = "bookings", indexes = {
         @Index(name = "idx_booking_user", columnList = "userId"),
         @Index(name = "idx_booking_status", columnList = "status"),
         @Index(name = "idx_booking_vehicle", columnList = "vehicleNumber"),
@@ -18,8 +20,7 @@ import java.time.LocalDateTime;
         @Index(name = "idx_booking_vehicle_type", columnList = "vehicleType"),
         @Index(name = "idx_booking_start_time", columnList = "startTime"),
         @Index(name = "idx_booking_end_time", columnList = "endTime")
-    }
-)
+})
 public class Booking {
 
     @Id
@@ -31,10 +32,14 @@ public class Booking {
     @Column(unique = true)
     private String bookingId;
 
+    @NotBlank(message = "Vehicle number is required")
+    @Pattern(regexp = "^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{4}$", message = "Invalid vehicle number")
     private String vehicleNumber;
 
+    @Pattern(regexp = "^[0-9]{10}$", message = "Invalid phone number")
     private String phoneNumber;
 
+    @NotBlank(message = "Parking ID is required")
     private String parkingId;
 
     private String parkingName;
@@ -42,8 +47,6 @@ public class Booking {
     private String location;
 
     private String parkingImageUrl;
-
-    private String vehicleType;
 
     private String type;
 
@@ -53,6 +56,12 @@ public class Booking {
 
     private String cancelReason;
 
+    @NotBlank(message = "Vehicle type is required")
+
+    @Pattern(regexp = "TWO_WHEELER|FOUR_WHEELER", message = "Invalid vehicle type")
+    private String vehicleType;
+
+    @NotNull(message = "Start time is required")
     private LocalDateTime startTime;
 
     private LocalDateTime endTime;
@@ -85,6 +94,10 @@ public class Booking {
 
     private double refundAmount;
 
+    private double bookingFeeRefund;
+
+    private double assuranceDepositRefund;
+
     private String refundId;
 
     private String refundStatus;
@@ -112,6 +125,15 @@ public class Booking {
     private String fineOrderId;
 
     private String finePaymentId;
+
+    @Column(name = "payment_link_id")
+    private String paymentLinkId;
+
+    private String paymentLinkUrl;
+
+    private String paymentLinkStatus;
+
+    private String paymentLinkReference;
 
     private LocalDateTime finePaymentTime;
 

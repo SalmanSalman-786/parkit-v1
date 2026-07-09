@@ -1,11 +1,13 @@
 package com.parking.backend.service;
 
+import com.parking.backend.dto.NearbyParkingResponse;
 import com.parking.backend.model.Parking;
 import com.parking.backend.repository.ParkingRepository;
 import com.parking.backend.repository.BookingRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.data.domain.PageRequest;
 import java.util.List;
+import java.time.LocalDate;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -37,6 +39,22 @@ public class ParkingService {
 
                 if (parking.getLatitude() == 0 || parking.getLongitude() == 0) {
                         throw new RuntimeException("Invalid location");
+                }
+
+                if (parking.getBookingWindowStart() == null) {
+                        parking.setBookingWindowStart(LocalDate.now());
+                }
+
+                if (parking.getBookingWindowEnd() == null) {
+                        parking.setBookingWindowEnd(
+                                        parking.getBookingWindowStart().plusDays(30));
+                }
+
+                if (parking.getBookingWindowEnd()
+                                .isBefore(parking.getBookingWindowStart())) {
+
+                        throw new RuntimeException(
+                                        "Booking window end date cannot be before start date.");
                 }
 
                 return parkingRepository.save(parking);
@@ -73,47 +91,48 @@ public class ParkingService {
                 return parkings;
         }
 
-        public List<Parking> getNearby(double lat, double lng) { // User App m2
+        public NearbyParkingResponse getNearby(double lat, double lng) {
 
-                double radius = 5 / 111.0; // approx conversion
+                // First search within 5 km
+                double radius = 5 / 111.0;
 
                 double minLat = lat - radius;
                 double maxLat = lat + radius;
                 double minLng = lng - radius;
                 double maxLng = lng + radius;
 
-                return parkingRepository.findNearby(minLat, maxLat, minLng, maxLng);
+                List<Parking> parkings = parkingRepository.findNearby(minLat, maxLat, minLng, maxLng);
+
+                if (!parkings.isEmpty()) {
+                        return new NearbyParkingResponse(
+                                        parkings,
+                                        false,
+                                        "");
+                }
+
+                // Search within 10 km
+                radius = 10 / 111.0;
+
+                minLat = lat - radius;
+                maxLat = lat + radius;
+                minLng = lng - radius;
+                maxLng = lng + radius;
+
+                parkings = parkingRepository.findNearby(minLat, maxLat, minLng, maxLng);
+
+                if (!parkings.isEmpty()) {
+                        return new NearbyParkingResponse(
+                                        parkings,
+                                        true,
+                                        "No parking found within 5 km. Showing nearby parking within 10 km.");
+                }
+
+                // Final fallback
+                return new NearbyParkingResponse(
+                                parkingRepository.findAll(),
+                                true,
+                                "No parking found within 10 km. Showing all available parking.");
         }
-
-        // public boolean decreaseTwoWheelerSlot(String parkingId) {
-
-        // Query query = new Query();
-        // query.addCriteria(
-        // Criteria.where("_id").is(parkingId)
-        // .and("twoWheelerAvailable").gt(0));
-
-        // Update update = new Update().inc("twoWheelerAvailable", -1);
-
-        // UpdateResult result = mongoTemplate.updateFirst(query, update,
-        // Parking.class);
-
-        // return result.getModifiedCount() > 0;
-        // }
-
-        // public boolean decreaseFourWheelerSlot(String parkingId) {
-
-        // Query query = new Query();
-        // query.addCriteria(
-        // Criteria.where("_id").is(parkingId)
-        // .and("fourWheelerAvailable").gt(0));
-
-        // Update update = new Update().inc("fourWheelerAvailable", -1);
-
-        // UpdateResult result = mongoTemplate.updateFirst(query, update,
-        // Parking.class);
-
-        // return result.getModifiedCount() > 0;
-        // }
 
         public Parking getParkingById(String id) { // Admin Website (Editparking m1 + parking details m1)
                 return parkingRepository.findById(id)
@@ -154,6 +173,32 @@ public class ParkingService {
 
                 parking.setCarHourlyRate(
                                 updated.getCarHourlyRate());
+
+                parking.setBikeAssuranceDeposit(
+                                updated.getBikeAssuranceDeposit());
+
+                parking.setCarAssuranceDeposit(
+                                updated.getCarAssuranceDeposit());
+
+                if (updated.getBookingWindowStart() == null ||
+                                updated.getBookingWindowEnd() == null) {
+
+                        throw new RuntimeException(
+                                        "Booking window start and end dates are required.");
+                }
+
+                if (updated.getBookingWindowEnd()
+                                .isBefore(updated.getBookingWindowStart())) {
+
+                        throw new RuntimeException(
+                                        "Booking window end date cannot be before start date.");
+                }
+
+                parking.setBookingWindowStart(
+                                updated.getBookingWindowStart());
+
+                parking.setBookingWindowEnd(
+                                updated.getBookingWindowEnd());
 
                 return parkingRepository.save(parking);
         }

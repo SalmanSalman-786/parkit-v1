@@ -2,6 +2,7 @@ package com.parking.backend.security;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -17,6 +18,9 @@ public class SecurityConfig {
 
         private final JwtAuthFilter jwtAuthFilter;
 
+        @Value("${cors.allowed-origins}")
+        private String allowedOrigins;
+
         SecurityConfig(JwtAuthFilter jwtAuthFilter) {
                 this.jwtAuthFilter = jwtAuthFilter;
         }
@@ -28,6 +32,23 @@ public class SecurityConfig {
                                 .csrf(csrf -> csrf.disable())
 
                                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+
+                                .headers(headers -> headers
+
+                                                // Prevent MIME type sniffing
+                                                .contentTypeOptions(contentTypeOptions -> {
+                                                })
+
+                                                // Prevent clickjacking
+                                                .frameOptions(frameOptions -> frameOptions.deny())
+
+                                                // Control referrer information
+                                                .referrerPolicy(referrerPolicy -> referrerPolicy
+                                                                .policy(org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER))
+
+                                                // Restrict browser features
+                                                .permissionsPolicy(permissions -> permissions
+                                                                .policy("camera=(), microphone=(), geolocation=()")))
 
                                 .authorizeHttpRequests(auth -> auth
 
@@ -77,11 +98,24 @@ public class SecurityConfig {
                                                 // 📍 PARKING (public)
                                                 .requestMatchers("/api/parking/**").permitAll()
 
+                                                .requestMatchers("/api/payment/webhook")
+                                                .permitAll()
+
                                                 .requestMatchers("/api/payment/**")
                                                 .hasAnyRole("USER", "GUARD", "ADMIN")
 
                                                 // 👤 USER APIs
                                                 .requestMatchers("/api/user/**").authenticated()
+
+                                                // 🔔 NOTIFICATIONS
+                                                .requestMatchers("/api/notifications/**")
+                                                .authenticated()
+
+                                                .requestMatchers("/api/announcements")
+                                                .permitAll()
+
+                                                .requestMatchers("/api/admin/announcements/**")
+                                                .hasRole("ADMIN")
 
                                                 .requestMatchers("/api/waitlist/**")
                                                 .authenticated()
@@ -114,7 +148,10 @@ public class SecurityConfig {
                 // ===============================
                 // DEVELOPMENT
                 // ===============================
-                config.setAllowedOriginPatterns(List.of("*"));
+
+                // config.setAllowedOriginPatterns(List.of("*"));
+                config.setAllowedOrigins(
+                                List.of(allowedOrigins.split(",")));
 
                 // ===============================
                 // PRODUCTION
@@ -129,7 +166,20 @@ public class SecurityConfig {
                 config.setAllowedMethods(List.of(
                                 "GET", "POST", "PUT", "DELETE", "OPTIONS"));
 
-                config.setAllowedHeaders(List.of("*"));
+                // config.setAllowedHeaders(List.of("*"));
+
+                config.setAllowedHeaders(List.of(
+                                "Authorization",
+                                "Content-Type",
+                                "Accept",
+                                "Origin",
+                                "X-Requested-With",
+                                "admin-key"));
+
+                config.setExposedHeaders(List.of(
+                                "Authorization"));
+
+                config.setMaxAge(3600L);
 
                 UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
 

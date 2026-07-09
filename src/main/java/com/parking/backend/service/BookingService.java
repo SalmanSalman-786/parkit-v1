@@ -1,11 +1,16 @@
 package com.parking.backend.service;
 
+import com.parking.backend.dto.CancelPreviewResponse;
+import com.parking.backend.dto.OperationLookupResponse;
+import com.parking.backend.dto.PaymentStatus;
 import com.parking.backend.model.Booking;
+import com.parking.backend.model.NotificationType;
 import com.parking.backend.model.Parking;
 import com.parking.backend.repository.BookingRepository;
 import com.parking.backend.repository.ParkingRepository;
 import com.parking.backend.repository.UserRepository;
 import com.parking.backend.model.User;
+import com.parking.backend.service.NotificationService;
 
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -21,6 +26,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.springframework.transaction.annotation.Transactional;
+
 @Service
 public class BookingService {
 
@@ -32,34 +42,44 @@ public class BookingService {
 
         private final RealtimeService realtimeService;
 
-        private final FirebaseNotificationService firebaseNotificationService;
-
         private final SmsService smsService;
 
         private final PaymentService paymentService;
 
         private final WaitlistService waitlistService;
 
+        private final BookingCapacityService bookingCapacityService;
+
+        private final ParkingTariffService parkingTariffService;
+
+        private final NotificationService notificationService;
+
         private final Map<String, Object> parkingLocks = new ConcurrentHashMap<>();
+
+        private static final Logger log = LoggerFactory.getLogger(BookingService.class);
 
         BookingService(
                         BookingRepository bookingRepository,
                         ParkingRepository parkingRepository,
                         UserRepository userRepository,
                         RealtimeService realtimeService,
-                        FirebaseNotificationService firebaseNotificationService,
                         PaymentService paymentService,
                         SmsService smsService,
-                        WaitlistService waitlistService) {
+                        WaitlistService waitlistService,
+                        BookingCapacityService bookingCapacityService,
+                        ParkingTariffService parkingTariffService,
+                        NotificationService notificationService) {
 
                 this.bookingRepository = bookingRepository;
                 this.parkingRepository = parkingRepository;
                 this.userRepository = userRepository;
                 this.realtimeService = realtimeService; // <-- add this
-                this.firebaseNotificationService = firebaseNotificationService;
                 this.smsService = smsService;
                 this.paymentService = paymentService;
                 this.waitlistService = waitlistService;
+                this.bookingCapacityService = bookingCapacityService;
+                this.parkingTariffService = parkingTariffService;
+                this.notificationService = notificationService;
         }
 
         public int getBookingCapacity( // new logic
@@ -91,32 +111,33 @@ public class BookingService {
                 int walkinCapacity = totalCapacity - bookingCapacity;
 
                 LocalDate today = LocalDate.now();
+
+                LocalDateTime startOfDay = today.atStartOfDay();
+
+                LocalDateTime endOfDay = today.plusDays(1).atStartOfDay();
+
                 long bookedToday = bookingRepository
-                                .findByParkingId(parkingId)
-                                .stream()
-                                .filter(b -> vehicleType.equals(b.getVehicleType()))
-                                .filter(b -> !"WALKIN".equalsIgnoreCase(b.getType()))
-                                .filter(b -> "BOOKED".equals(b.getStatus()))
-                                .filter(b -> b.getStartTime() != null)
-                                .filter(b -> b.getStartTime()
-                                                .toLocalDate()
-                                                .equals(today))
-                                .count();
+                                .countByParkingIdAndVehicleTypeAndTypeNotAndStatusAndStartTimeBetween(
+                                                parkingId,
+                                                vehicleType,
+                                                "WALKIN",
+                                                "BOOKED",
+                                                startOfDay,
+                                                endOfDay);
 
                 long activeBookings = bookingRepository
-                                .findByParkingId(parkingId)
-                                .stream()
-                                .filter(b -> vehicleType.equals(b.getVehicleType()))
-                                .filter(b -> !"WALKIN".equalsIgnoreCase(b.getType()))
-                                .filter(b -> "ACTIVE".equals(b.getStatus()))
-                                .count();
+                                .countByParkingIdAndVehicleTypeAndTypeNotAndStatus(
+                                                parkingId,
+                                                vehicleType,
+                                                "WALKIN",
+                                                "ACTIVE");
 
-                long activeWalkins = bookingRepository.findByParkingId(parkingId)
-                                .stream()
-                                .filter(b -> vehicleType.equals(b.getVehicleType()))
-                                .filter(b -> "ACTIVE".equals(b.getStatus()))
-                                .filter(b -> "WALKIN".equalsIgnoreCase(b.getType()))
-                                .count();
+                long activeWalkins = bookingRepository
+                                .countByParkingIdAndVehicleTypeAndTypeAndStatus(
+                                                parkingId,
+                                                vehicleType,
+                                                "WALKIN",
+                                                "ACTIVE");
 
                 long bookingCount = bookedToday + activeBookings;
 
@@ -151,21 +172,36 @@ public class BookingService {
                 return result;
         }
 
-        private boolean occupiesDate(
-                        Booking booking,
-                        LocalDate date) {
+        private void reserveBookingCapacity(Booking booking) {
 
-                if (booking.getStartTime() == null ||
-                                booking.getEndTime() == null) {
-                        return false;
+                LocalDate current = booking.getStartTime().toLocalDate();
+                LocalDate end = booking.getEndTime().toLocalDate();
+
+                while (!current.isAfter(end)) {
+
+                        bookingCapacityService.reserveSlot(
+                                        booking.getParkingId(),
+                                        current,
+                                        booking.getVehicleType());
+
+                        current = current.plusDays(1);
                 }
+        }
 
-                LocalDate startDate = booking.getStartTime().toLocalDate();
+        private void releaseBookingCapacity(Booking booking) {
 
-                LocalDate endDate = booking.getEndTime().toLocalDate();
+                LocalDate current = booking.getStartTime().toLocalDate();
+                LocalDate end = booking.getEndTime().toLocalDate();
 
-                return !date.isBefore(startDate)
-                                && !date.isAfter(endDate);
+                while (!current.isAfter(end)) {
+
+                        bookingCapacityService.releaseSlot(
+                                        booking.getParkingId(),
+                                        current,
+                                        booking.getVehicleType());
+
+                        current = current.plusDays(1);
+                }
         }
 
         public Map<String, Object> getAvailabilityForDate( // User App (booking screen m2)
@@ -177,31 +213,61 @@ public class BookingService {
                                 .findById(parkingId)
                                 .orElseThrow();
 
+                if (parking.getBookingWindowStart() != null &&
+                                bookingDate.isBefore(parking.getBookingWindowStart())) {
+
+                        Map<String, Object> result = new HashMap<>();
+                        result.put("date", bookingDate);
+                        result.put("bookingCapacity", 0);
+                        result.put("bookingCount", 0);
+                        result.put("remainingBookingCapacity", 0);
+                        result.put("bookingAvailable", false);
+
+                        return result;
+                }
+
+                if (parking.getBookingWindowEnd() != null &&
+                                bookingDate.isAfter(parking.getBookingWindowEnd())) {
+
+                        Map<String, Object> result = new HashMap<>();
+                        result.put("date", bookingDate);
+                        result.put("bookingCapacity", 0);
+                        result.put("bookingCount", 0);
+                        result.put("remainingBookingCapacity", 0);
+                        result.put("bookingAvailable", false);
+
+                        return result;
+                }
+
                 int bookingCapacity = getBookingCapacity(
                                 parking,
                                 vehicleType);
 
+                LocalDateTime dayStart = bookingDate.atStartOfDay();
+
+                LocalDateTime nextDay = bookingDate
+                                .plusDays(1)
+                                .atStartOfDay();
+
                 long bookedForDate = bookingRepository
-                                .findByParkingId(parkingId)
-                                .stream()
-                                .filter(b -> vehicleType.equals(b.getVehicleType()))
-                                .filter(b -> !"WALKIN".equalsIgnoreCase(b.getType()))
-                                .filter(b -> "BOOKED".equals(b.getStatus()))
-                                .filter(b -> b.getStartTime() != null)
-                                .filter(b -> occupiesDate(b, bookingDate))
-                                .count();
+                                .countBookingsOccupyingDate(
+                                                parkingId,
+                                                vehicleType,
+                                                "WALKIN",
+                                                "BOOKED",
+                                                dayStart,
+                                                nextDay);
 
                 long activeToday = 0;
 
                 if (bookingDate.equals(LocalDate.now())) {
 
                         activeToday = bookingRepository
-                                        .findByParkingId(parkingId)
-                                        .stream()
-                                        .filter(b -> vehicleType.equals(b.getVehicleType()))
-                                        .filter(b -> !"WALKIN".equalsIgnoreCase(b.getType()))
-                                        .filter(b -> "ACTIVE".equals(b.getStatus()))
-                                        .count();
+                                        .countByParkingIdAndVehicleTypeAndTypeNotAndStatus(
+                                                        parkingId,
+                                                        vehicleType,
+                                                        "WALKIN",
+                                                        "ACTIVE");
                 }
 
                 long bookingCount = bookedForDate + activeToday;
@@ -226,6 +292,124 @@ public class BookingService {
                 return result;
         }
 
+        public Map<String, Object> getAvailabilityForRange(
+                        String parkingId,
+                        String vehicleType,
+                        LocalDateTime startTime,
+                        LocalDateTime endTime) {
+
+                Parking parking = parkingRepository
+                                .findById(parkingId)
+                                .orElseThrow();
+
+                int bookingCapacity = getBookingCapacity(
+                                parking,
+                                vehicleType);
+
+                LocalDate current = startTime.toLocalDate();
+                LocalDate endDate = endTime.toLocalDate();
+
+                List<Map<String, Object>> days = new ArrayList<>();
+
+                boolean available = true;
+                LocalDate blockedDate = null;
+
+                int minimumRemaining = Integer.MAX_VALUE;
+
+                while (!current.isAfter(endDate)) {
+
+                        if (parking.getBookingWindowStart() != null &&
+                                        current.isBefore(parking.getBookingWindowStart())) {
+
+                                available = false;
+                                blockedDate = current;
+                                break;
+                        }
+
+                        if (parking.getBookingWindowEnd() != null &&
+                                        current.isAfter(parking.getBookingWindowEnd())) {
+
+                                available = false;
+                                blockedDate = current;
+                                break;
+                        }
+
+                        LocalDateTime dayStart = current.atStartOfDay();
+
+                        LocalDateTime nextDay = current
+                                        .plusDays(1)
+                                        .atStartOfDay();
+
+                        long bookedForDate = bookingRepository.countBookingsOccupyingDate(
+                                        parkingId,
+                                        vehicleType,
+                                        "WALKIN",
+                                        "BOOKED",
+                                        dayStart,
+                                        nextDay);
+
+                        long activeToday = 0;
+
+                        if (current.equals(LocalDate.now())) {
+
+                                activeToday = bookingRepository
+                                                .countByParkingIdAndVehicleTypeAndTypeNotAndStatus(
+                                                                parkingId,
+                                                                vehicleType,
+                                                                "WALKIN",
+                                                                "ACTIVE");
+                        }
+
+                        long bookingCount = bookedForDate + activeToday;
+
+                        int remaining = Math.max(
+                                        0,
+                                        bookingCapacity - (int) bookingCount);
+
+                        minimumRemaining = Math.min(
+                                        minimumRemaining,
+                                        remaining);
+
+                        Map<String, Object> day = new HashMap<>();
+
+                        day.put("date", current);
+
+                        day.put("bookingCapacity", bookingCapacity);
+
+                        day.put("bookingCount", bookingCount);
+
+                        day.put("remainingBookingCapacity", remaining);
+
+                        days.add(day);
+
+                        if (remaining <= 0) {
+
+                                available = false;
+                                blockedDate = current;
+                                break;
+                        }
+
+                        current = current.plusDays(1);
+                }
+
+                Map<String, Object> result = new HashMap<>();
+
+                result.put("available", available);
+
+                result.put("blockedDate", blockedDate);
+
+                result.put("bookingCapacity", bookingCapacity);
+
+                result.put("remainingBookingCapacity",
+                                minimumRemaining == Integer.MAX_VALUE
+                                                ? 0
+                                                : minimumRemaining);
+
+                result.put("days", days);
+
+                return result;
+        }
+
         public void validateBooking(Booking booking) { // User App (booking screen m6)
 
                 System.out.println("========== VALIDATE BOOKING ==========");
@@ -246,12 +430,39 @@ public class BookingService {
                 Parking parking = parkingRepository.findById(booking.getParkingId())
                                 .orElseThrow(() -> new RuntimeException("Parking not found"));
 
+                LocalDate current = booking.getStartTime().toLocalDate();
+                LocalDate endDate = booking.getEndTime().toLocalDate();
+
+                while (!current.isAfter(endDate)) {
+
+                        if (parking.getBookingWindowStart() != null &&
+                                        current.isBefore(parking.getBookingWindowStart())) {
+
+                                throw new ResponseStatusException(
+                                                HttpStatus.BAD_REQUEST,
+                                                "Booking is not available on " + current);
+                        }
+
+                        if (parking.getBookingWindowEnd() != null &&
+                                        current.isAfter(parking.getBookingWindowEnd())) {
+
+                                throw new ResponseStatusException(
+                                                HttpStatus.BAD_REQUEST,
+                                                "Booking is not available on " + current);
+                        }
+
+                        current = current.plusDays(1);
+                }
+
                 LocalDateTime start = booking.getStartTime();
                 LocalDateTime end = booking.getEndTime();
                 // SAME VEHICLE CHECK
                 List<Booking> vehicleBookings = bookingRepository.findByVehicleNumberAndStatusIn(
                                 booking.getVehicleNumber(),
-                                List.of("BOOKED", "ACTIVE"));
+                                List.of(
+                                                "PENDING_PAYMENT",
+                                                "BOOKED",
+                                                "ACTIVE"));
 
                 for (Booking b : vehicleBookings) {
 
@@ -269,197 +480,188 @@ public class BookingService {
                                 parking,
                                 booking.getVehicleType());
 
-                LocalDate bookingDate = booking.getStartTime().toLocalDate();
+                current = booking.getStartTime().toLocalDate();
+                endDate = booking.getEndTime().toLocalDate();
 
-                long bookedForDate = bookingRepository
-                                .findByParkingId(booking.getParkingId())
-                                .stream()
-                                .filter(b -> booking.getVehicleType()
-                                                .equals(b.getVehicleType()))
-                                .filter(b -> !"WALKIN".equalsIgnoreCase(b.getType()))
-                                .filter(b -> "BOOKED".equals(b.getStatus()))
-                                .filter(b -> b.getStartTime() != null)
-                                .filter(b -> occupiesDate(b, bookingDate))
-                                .count();
+                while (!current.isAfter(endDate)) {
 
-                long activeToday = 0;
+                        LocalDateTime dayStart = current.atStartOfDay();
 
-                if (bookingDate.equals(LocalDate.now())) {
-
-                        activeToday = bookingRepository
-                                        .findByParkingId(booking.getParkingId())
-                                        .stream()
-                                        .filter(b -> booking.getVehicleType()
-                                                        .equals(b.getVehicleType()))
-                                        .filter(b -> !"WALKIN".equalsIgnoreCase(b.getType()))
-                                        .filter(b -> "ACTIVE".equals(b.getStatus()))
-                                        .count();
-                }
-
-                long occupied = bookedForDate + activeToday;
-
-                System.out.println("BOOKING DATE = " + bookingDate);
-                System.out.println("CAPACITY = " + capacity);
-                System.out.println("OCCUPIED = " + occupied);
-
-                if (occupied >= capacity) {
-                        throw new ResponseStatusException(
-                                        HttpStatus.BAD_REQUEST,
-                                        "Booking slots full");
-                }
-        }
-
-        public Booking createBooking(Booking booking) { // User App (booking screen m7)
-
-                Object lock = getLock(booking.getParkingId());
-
-                synchronized (lock) {
-
-                        Parking parking = parkingRepository.findById(booking.getParkingId())
-                                        .orElseThrow(() -> new RuntimeException("Parking not found"));
-
-                        if (booking.getEndTime().isBefore(booking.getStartTime())) {
-                                throw new RuntimeException("Invalid time selection");
-                        }
-
-                        booking.setBookingId("BK-" + java.util.UUID.randomUUID());
-                        booking.setParkingName(parking.getName());
-                        booking.setLocation(parking.getLocation());
-                        booking.setParkingImageUrl(parking.getImageUrl());
-                        booking.setType("BOOKING");
-                        booking.setStatus("PENDING_PAYMENT");
-                        booking.setPaymentStatus("PENDING");
-
-                        LocalDateTime now = LocalDateTime.now();
-
-                        booking.setCreatedAt(now);
-
-                        // 🔥 ROUND TIMES
-                        LocalDateTime start = booking.getStartTime();
-                        LocalDateTime end = booking.getEndTime();
-
-                        if (!end.isAfter(start)) {
-                                throw new RuntimeException("Invalid time range");
-                        }
-
-                        if (start.isBefore(LocalDateTime.now())) {
-                                throw new RuntimeException(
-                                                "Start time must be in the future");
-                        }
-
-                        booking.setStartTime(start);
-                        booking.setEndTime(end);
-
-                        // 🔥 SAME VEHICLE OVERLAP CHECK
-                        List<Booking> vehicleBookings = bookingRepository.findByVehicleNumberAndStatusIn(
-                                        booking.getVehicleNumber(),
-                                        List.of("BOOKED", "ACTIVE"));
-
-                        for (Booking b : vehicleBookings) {
-
-                                // skip same booking (future update support)
-                                if (booking.getBookingId() != null &&
-                                                booking.getBookingId().equals(b.getBookingId())) {
-                                        continue;
-                                }
-
-                                boolean overlap = start.isBefore(b.getEndTime()) &&
-                                                end.isAfter(b.getStartTime());
-
-                                if (overlap) {
-                                        throw new ResponseStatusException(
-                                                        HttpStatus.BAD_REQUEST,
-                                                        "Vehicle already has another booking during this time");
-                                }
-                        }
-
-                        int capacity = getBookingCapacity(
-                                        parking,
-                                        booking.getVehicleType());
-
-                        LocalDate bookingDate = booking.getStartTime().toLocalDate();
+                        LocalDateTime nextDay = current
+                                        .plusDays(1)
+                                        .atStartOfDay();
 
                         long bookedForDate = bookingRepository
-                                        .findByParkingId(booking.getParkingId())
-                                        .stream()
-                                        .filter(b -> booking.getVehicleType()
-                                                        .equals(b.getVehicleType()))
-                                        .filter(b -> !"WALKIN".equalsIgnoreCase(b.getType()))
-                                        .filter(b -> "BOOKED".equals(b.getStatus()))
-                                        .filter(b -> b.getStartTime() != null)
-                                        .filter(b -> occupiesDate(b, bookingDate))
-                                        .count();
+                                        .countBookingsOccupyingDate(
+                                                        booking.getParkingId(),
+                                                        booking.getVehicleType(),
+                                                        "WALKIN",
+                                                        "BOOKED",
+                                                        dayStart,
+                                                        nextDay);
 
                         long activeToday = 0;
 
-                        if (bookingDate.equals(LocalDate.now())) {
+                        if (current.equals(LocalDate.now())) {
 
                                 activeToday = bookingRepository
-                                                .findByParkingId(booking.getParkingId())
-                                                .stream()
-                                                .filter(b -> booking.getVehicleType()
-                                                                .equals(b.getVehicleType()))
-                                                .filter(b -> !"WALKIN".equalsIgnoreCase(b.getType()))
-                                                .filter(b -> "ACTIVE".equals(b.getStatus()))
-                                                .count();
+                                                .countByParkingIdAndVehicleTypeAndTypeNotAndStatus(
+                                                                booking.getParkingId(),
+                                                                booking.getVehicleType(),
+                                                                "WALKIN",
+                                                                "ACTIVE");
                         }
 
                         long occupied = bookedForDate + activeToday;
 
-                        System.out.println("BOOKING DATE = " + bookingDate);
+                        System.out.println("BOOKING DATE = " + current);
                         System.out.println("CAPACITY = " + capacity);
                         System.out.println("OCCUPIED = " + occupied);
 
                         if (occupied >= capacity) {
-                                throw new RuntimeException(
-                                                "Booking slots full");
+                                throw new ResponseStatusException(
+                                                HttpStatus.BAD_REQUEST,
+                                                "Booking slots full on " + current);
                         }
 
-                        // 💰 CALCULATE
-                        long durationMinutes = Duration.between(start, end)
-                                        .toMinutes();
-
-                        double bookingRate = "TWO_WHEELER".equals(
-                                        booking.getVehicleType())
-                                                        ? parking.getBikeHourlyRate()
-                                                        : parking.getCarHourlyRate();
-
-                        double bookingFee = Math.ceil(durationMinutes / 60.0)
-                                        * bookingRate;
-
-                        // assurance
-                        long reserveMinutes = Duration.between(
-                                        now,
-                                        start)
-                                        .toMinutes();
-
-                        double assuranceDeposit = Math.max(
-                                        reserveMinutes,
-                                        1);
-
-                        // save values
-                        booking.setDurationMinutes(
-                                        durationMinutes);
-
-                        booking.setBookingFee(
-                                        bookingFee);
-
-                        booking.setAssuranceDeposit(
-                                        assuranceDeposit);
-
-                        // total amount to pay now
-                        booking.setAmount(
-                                        bookingFee +
-                                                        assuranceDeposit);
-
-                        // 💾 SAVE
-                        Booking saved = bookingRepository.save(booking);
-                        parkingRepository.save(parking);
-
-                        realtimeService.sendDashboardUpdate("BOOKING_CREATED");
-
-                        return saved;
+                        current = current.plusDays(1);
                 }
+        }
+
+        private double calculateAssuranceDeposit(
+                        Parking parking,
+                        String vehicleType,
+                        LocalDateTime start,
+                        LocalDateTime end) {
+
+                long occupiedDays = Duration.between(
+                                start.toLocalDate().atStartOfDay(),
+                                end.toLocalDate().plusDays(1).atStartOfDay())
+                                .toDays();
+
+                double depositPerDay = "TWO_WHEELER".equals(vehicleType)
+                                ? parking.getBikeAssuranceDeposit()
+                                : parking.getCarAssuranceDeposit();
+
+                return occupiedDays * depositPerDay;
+        }
+
+        @Transactional
+        public Booking createBooking(Booking booking) { // User App (booking screen m7)
+
+                Parking parking = parkingRepository.findById(booking.getParkingId())
+                                .orElseThrow(() -> new RuntimeException("Parking not found"));
+
+                if (booking.getEndTime().isBefore(booking.getStartTime())) {
+                        throw new RuntimeException("Invalid time selection");
+                }
+
+                User user = userRepository.findById(booking.getUserId())
+                                .orElseThrow(() -> new RuntimeException("User not found"));
+
+                booking.setPhoneNumber(user.getPhoneNumber());
+
+                booking.setBookingId("BK-" + java.util.UUID.randomUUID());
+                booking.setParkingName(parking.getName());
+                booking.setLocation(parking.getLocation());
+                booking.setParkingImageUrl(parking.getImageUrl());
+                booking.setType("BOOKING");
+                booking.setStatus("PENDING_PAYMENT");
+                booking.setPaymentStatus("PENDING");
+
+                LocalDateTime now = LocalDateTime.now();
+
+                booking.setCreatedAt(now);
+
+                // 🔥 ROUND TIMES
+                LocalDateTime start = booking.getStartTime();
+                LocalDateTime end = booking.getEndTime();
+
+                if (!end.isAfter(start)) {
+                        throw new RuntimeException("Invalid time range");
+                }
+
+                if (start.isBefore(LocalDateTime.now())) {
+                        throw new RuntimeException(
+                                        "Start time must be in the future");
+                }
+
+                booking.setStartTime(start);
+                booking.setEndTime(end);
+
+                // 🔥 SAME VEHICLE OVERLAP CHECK
+                List<Booking> vehicleBookings = bookingRepository.findByVehicleNumberAndStatusIn(
+                                booking.getVehicleNumber(),
+                                List.of(
+                                                "PENDING_PAYMENT",
+                                                "BOOKED",
+                                                "ACTIVE"));
+
+                for (Booking b : vehicleBookings) {
+
+                        // skip same booking (future update support)
+                        if (booking.getBookingId() != null &&
+                                        booking.getBookingId().equals(b.getBookingId())) {
+                                continue;
+                        }
+
+                        boolean overlap = start.isBefore(b.getEndTime()) &&
+                                        end.isAfter(b.getStartTime());
+
+                        if (overlap) {
+                                throw new ResponseStatusException(
+                                                HttpStatus.BAD_REQUEST,
+                                                "Vehicle already has another booking during this time");
+                        }
+                }
+
+                // LocalDate bookingDate = booking.getStartTime().toLocalDate();
+
+                // bookingCapacityService.reserveSlot(
+                // booking.getParkingId(),
+                // bookingDate,
+                // booking.getVehicleType());
+
+                reserveBookingCapacity(booking);
+
+                // 💰 CALCULATE
+                long durationMinutes = Duration.between(start, end)
+                                .toMinutes();
+
+                double bookingFee = parkingTariffService.calculatePrice(
+                                parking.getId(),
+                                ParkingTariffService.BOOKING,
+                                booking.getVehicleType(),
+                                durationMinutes);
+                // assurance
+                double assuranceDeposit = calculateAssuranceDeposit(
+                                parking,
+                                booking.getVehicleType(),
+                                start,
+                                end);
+
+                // save values
+                booking.setDurationMinutes(
+                                durationMinutes);
+
+                booking.setBookingFee(
+                                bookingFee);
+
+                booking.setAssuranceDeposit(
+                                assuranceDeposit);
+
+                // total amount to pay now
+                booking.setAmount(
+                                bookingFee +
+                                                assuranceDeposit);
+
+                // 💾 SAVE
+                Booking saved = bookingRepository.save(booking);
+
+                realtimeService.sendDashboardUpdate("BOOKING_CREATED");
+
+                return saved;
+
         }
 
         public Map<String, Object> getPricePreview( // User App (booking screen m3)
@@ -482,6 +684,28 @@ public class BookingService {
                                 .findById(parkingId)
                                 .orElseThrow(() -> new RuntimeException("Parking not found"));
 
+                LocalDate current = start.toLocalDate();
+                LocalDate endDate = end.toLocalDate();
+
+                while (!current.isAfter(endDate)) {
+
+                        if (parking.getBookingWindowStart() != null &&
+                                        current.isBefore(parking.getBookingWindowStart())) {
+
+                                throw new RuntimeException(
+                                                "Booking is not available on " + current);
+                        }
+
+                        if (parking.getBookingWindowEnd() != null &&
+                                        current.isAfter(parking.getBookingWindowEnd())) {
+
+                                throw new RuntimeException(
+                                                "Booking is not available on " + current);
+                        }
+
+                        current = current.plusDays(1);
+                }
+
                 LocalDateTime now = LocalDateTime.now();
 
                 if (start.isBefore(now)) {
@@ -492,17 +716,17 @@ public class BookingService {
                 long durationMinutes = Duration.between(start, end)
                                 .toMinutes();
 
-                double bookingRate = "TWO_WHEELER".equals(vehicleType)
-                                ? parking.getBikeHourlyRate()
-                                : parking.getCarHourlyRate();
+                double bookingFee = parkingTariffService.calculatePrice(
+                                parking.getId(),
+                                ParkingTariffService.BOOKING,
+                                vehicleType,
+                                durationMinutes);
 
-                double bookingFee = Math.ceil(durationMinutes / 60.0)
-                                * bookingRate;
-
-                long reserveMinutes = Duration.between(now, start)
-                                .toMinutes();
-
-                double assuranceDeposit = Math.max(reserveMinutes, 1);
+                double assuranceDeposit = calculateAssuranceDeposit(
+                                parking,
+                                vehicleType,
+                                start,
+                                end);
 
                 Map<String, Object> result = new HashMap<>();
 
@@ -521,17 +745,28 @@ public class BookingService {
                 return result;
         }
 
+        @Transactional
         public Booking confirmPayment( // User App (booking screen m5)
                         String bookingId,
                         String paymentId,
                         String orderId) {
 
+                log.info(
+                                "Confirm payment started for {}",
+                                bookingId);
+
                 Booking booking = bookingRepository
-                                .findByBookingId(bookingId)
-                                .orElseThrow(() -> new RuntimeException("Booking not found"));
+                                .findByBookingIdForUpdate(bookingId)
+                                .orElseThrow(
+                                                () -> new RuntimeException("Booking not found"));
 
                 // ❌ already confirmed
                 if ("BOOKED".equals(booking.getStatus())) {
+
+                        log.info(
+                                        "Duplicate payment confirmation ignored for booking {}",
+                                        booking.getBookingId());
+
                         return booking;
                 }
 
@@ -554,34 +789,26 @@ public class BookingService {
 
                 Booking saved = bookingRepository.save(booking);
 
+                log.info(
+                                "Booking {} confirmed successfully",
+                                booking.getBookingId());
+
                 waitlistService.removeFromWaitlist(
                                 booking.getUserId(),
                                 booking.getParkingId(),
                                 booking.getVehicleType(),
                                 booking.getStartTime().toLocalDate());
-                User user = userRepository
-                                .findById(booking.getUserId())
-                                .orElse(null);
 
-                if (user != null &&
-                                user.getFcmToken() != null &&
-                                !user.getFcmToken().isEmpty()) {
-
-                        System.out.println("USER ID = " + user.getId());
-                        System.out.println("FCM TOKEN = " + user.getFcmToken());
-
-                        firebaseNotificationService.sendNotification(
-
-                                        user.getFcmToken(),
-
-                                        "🚗 Booking Confirmed",
-
-                                        "Your parking slot has been booked successfully");
-                }
+                notificationService.sendAlert(
+                                booking.getUserId(),
+                                "🚗 Booking Confirmed",
+                                "Your parking slot has been booked successfully.",
+                                NotificationType.BOOKING_CONFIRMED);
 
                 realtimeService.sendDashboardUpdate("PAYMENT_CONFIRMED");
 
                 return saved;
+
         }
 
         @Scheduled(fixedRate = 60000)
@@ -593,32 +820,79 @@ public class BookingService {
 
                 for (Booking booking : bookings) {
 
-                        // ⏰ 5 minute timeout
                         if (booking.getCreatedAt() == null) {
                                 continue;
                         }
 
-                        if (booking.getCreatedAt().plusMinutes(5).isBefore(now)) {
+                        if (!booking.getCreatedAt().plusMinutes(3).isBefore(now)) {
+                                continue;
+                        }
 
-                                Object lock = getLock(booking.getParkingId());
+                        if ("PAID".equals(booking.getPaymentStatus())) {
+                                continue;
+                        }
 
-                                synchronized (lock) {
+                        if (booking.getRazorpayOrderId() != null) {
 
-                                        // ❌ CANCEL BOOKING
-                                        booking.setStatus("CANCELLED");
+                                try {
 
-                                        booking.setCancelled(true);
+                                        PaymentStatus payment = paymentService.checkPayment(
+                                                        booking.getRazorpayOrderId());
 
-                                        booking.setPaymentStatus("FAILED");
+                                        if (payment.isCaptured()) {
 
-                                        bookingRepository.save(booking);
+                                                log.info(
+                                                                "Recovered payment for booking {}",
+                                                                booking.getBookingId());
 
+                                                Booking latest = bookingRepository
+                                                                .findByBookingIdForUpdate(
+                                                                                booking.getBookingId())
+                                                                .orElseThrow();
+
+                                                if (!"BOOKED".equals(latest.getStatus())) {
+
+                                                        confirmPayment(
+                                                                        latest.getBookingId(),
+                                                                        payment.getPaymentId(),
+                                                                        latest.getRazorpayOrderId());
+                                                }
+
+                                                continue;
+
+                                        }
+
+                                } catch (Exception e) {
+
+                                        log.error(
+                                                        "Payment recovery failed for booking {}",
+                                                        booking.getBookingId(),
+                                                        e);
+
+                                        // Never cancel after a successful Razorpay payment check.
+                                        // Retry again on the next scheduler execution.
+                                        continue;
                                 }
                         }
+
+                        booking.setStatus("CANCELLED");
+
+                        booking.setCancelled(true);
+
+                        booking.setPaymentStatus("FAILED");
+
+                        releaseBookingCapacity(booking);
+
+                        bookingRepository.save(booking);
+
+                        log.info(
+                                        "Booking {} cancelled",
+                                        booking.getBookingId());
                 }
         }
 
         // ✅ MARK ENTRY
+        @Transactional
         public String markEntry(String bookingId) {
 
                 Booking booking = bookingRepository.findByBookingId(bookingId)
@@ -661,15 +935,25 @@ public class BookingService {
                                 booking.getAssuranceDeposit());
 
                 booking.setDepositRefunded(true);
+                booking.setAssuranceDepositRefund(
+                                booking.getAssuranceDeposit());
                 booking.setDepositRefundTime(now);
                 booking.setDepositRefundId(refundId); // if field exists
                 booking.setDepositRefundStatus("SUCCESS");
                 bookingRepository.save(booking);
+                notificationService.sendAlert(
+                                booking.getUserId(),
+                                "🚗 Vehicle Entered",
+                                "Vehicle entry recorded. Your assurance deposit of ₹"
+                                                + booking.getAssuranceDeposit()
+                                                + " has been refunded.",
+                                NotificationType.ENTRY_SUCCESS);
                 realtimeService.sendDashboardUpdate("ENTRY_MARKED");
 
                 return "Entry marked";
         }
 
+        @Transactional
         public String markEntryByVehicle( // Guard App (operations m8)
                         String vehicleNumber,
                         String parkingId) {
@@ -722,62 +1006,73 @@ public class BookingService {
                                         "Vehicle not found in selected parking");
                 }
 
-                // 🔥 VALIDATE TIME WINDOW
-                LocalDateTime now = LocalDateTime.now();
+                Object lock = getLock(booking.getParkingId());
 
-                LocalDateTime start = booking.getStartTime();
+                synchronized (lock) {
 
-                if (now.isBefore(start.minusMinutes(30))) {
-                        throw new ResponseStatusException(
-                                        HttpStatus.BAD_REQUEST,
-                                        "Too early for entry");
+                        // 🔥 VALIDATE TIME WINDOW
+                        LocalDateTime now = LocalDateTime.now();
+
+                        LocalDateTime start = booking.getStartTime();
+
+                        if (now.isBefore(start.minusMinutes(30))) {
+                                throw new ResponseStatusException(
+                                                HttpStatus.BAD_REQUEST,
+                                                "Too early for entry");
+                        }
+
+                        if (now.isAfter(start.plusMinutes(30))) {
+                                throw new ResponseStatusException(
+                                                HttpStatus.BAD_REQUEST,
+                                                "Booking expired");
+                        }
+
+                        if (booking.getEntryTime() != null) {
+                                return "Already entered";
+                        }
+                        if (booking.isDepositRefunded()) {
+                                return "Deposit already refunded";
+                        }
+
+                        booking.setStatus("ACTIVE");
+                        booking.setEntryTime(now);
+
+                        String refundId = paymentService.refundPayment(
+                                        booking.getRazorpayPaymentId(),
+                                        booking.getAssuranceDeposit());
+
+                        booking.setDepositRefunded(true);
+
+                        booking.setAssuranceDepositRefund(
+                                        booking.getAssuranceDeposit());
+                        booking.setDepositRefundTime(now);
+                        booking.setDepositRefundId(refundId); // if field exists
+                        booking.setDepositRefundStatus("SUCCESS");
+
+                        bookingRepository.save(booking);
+                        notificationService.sendAlert(
+                                        booking.getUserId(),
+                                        "🚗 Vehicle Entered",
+                                        "Vehicle entry recorded. Your assurance deposit of ₹"
+                                                        + booking.getAssuranceDeposit()
+                                                        + " has been refunded.",
+                                        NotificationType.ENTRY_SUCCESS);
+
+                        realtimeService.sendDashboardUpdate("ENTRY_MARKED");
+
+                        return "Entry marked";
                 }
-
-                if (now.isAfter(start.plusMinutes(30))) {
-                        throw new ResponseStatusException(
-                                        HttpStatus.BAD_REQUEST,
-                                        "Booking expired");
-                }
-
-                if (booking.getEntryTime() != null) {
-                        return "Already entered";
-                }
-                if (booking.isDepositRefunded()) {
-                        return "Deposit already refunded";
-                }
-
-                booking.setStatus("ACTIVE");
-                booking.setEntryTime(now);
-
-                String refundId = paymentService.refundPayment(
-                                booking.getRazorpayPaymentId(),
-                                booking.getAssuranceDeposit());
-
-                booking.setDepositRefunded(true);
-                booking.setDepositRefundTime(now);
-                booking.setDepositRefundId(refundId); // if field exists
-                booking.setDepositRefundStatus("SUCCESS");
-
-                bookingRepository.save(booking);
-
-                realtimeService.sendDashboardUpdate("ENTRY_MARKED");
-
-                return "Entry marked";
         }
 
         @Scheduled(fixedRate = 60000)
         public void sendBookingReminders() {
 
-                List<Booking> bookings = bookingRepository.findByStatus("BOOKED");
+                List<Booking> bookings = bookingRepository.findByStatusAndReminderSentFalse(
+                                "BOOKED");
 
                 LocalDateTime now = LocalDateTime.now();
 
                 for (Booking booking : bookings) {
-
-                        // ❌ already sent
-                        if (booking.isReminderSent()) {
-                                continue;
-                        }
 
                         // ❌ no start time
                         if (booking.getStartTime() == null) {
@@ -791,22 +1086,11 @@ public class BookingService {
                         // 🔥 SEND AT 15 MINUTES
                         if (minutes <= 15 && minutes >= 14) {
 
-                                User user = userRepository
-                                                .findById(booking.getUserId())
-                                                .orElse(null);
-
-                                if (user != null &&
-                                                user.getFcmToken() != null &&
-                                                !user.getFcmToken().isEmpty()) {
-
-                                        firebaseNotificationService.sendNotification(
-
-                                                        user.getFcmToken(),
-
-                                                        "⏰ Parking Reminder",
-
-                                                        "Your parking starts in 15 minutes");
-                                }
+                                notificationService.sendAlert(
+                                                booking.getUserId(),
+                                                "⏰ Parking Reminder",
+                                                "Your parking starts in 15 minutes.",
+                                                NotificationType.BOOKING_REMINDER);
 
                                 // ✅ prevent duplicate reminder
                                 booking.setReminderSent(true);
@@ -823,17 +1107,14 @@ public class BookingService {
         @Scheduled(fixedRate = 60000)
         public void sendExpiryAlerts() {
 
-                List<Booking> bookings = bookingRepository.findByStatus("ACTIVE");
+                List<Booking> bookings = bookingRepository
+                                .findByStatusAndExpiryAlertSentFalse("ACTIVE");
 
                 LocalDateTime now = LocalDateTime.now();
 
                 for (Booking booking : bookings) {
 
                         if ("WALKIN".equalsIgnoreCase(booking.getType())) {
-                                continue;
-                        }
-
-                        if (booking.isExpiryAlertSent()) {
                                 continue;
                         }
 
@@ -851,22 +1132,11 @@ public class BookingService {
                                         continue;
                                 }
 
-                                User user = userRepository
-                                                .findById(booking.getUserId())
-                                                .orElse(null);
-
-                                if (user != null &&
-                                                user.getFcmToken() != null &&
-                                                !user.getFcmToken().isEmpty()) {
-
-                                        firebaseNotificationService.sendNotification(
-
-                                                        user.getFcmToken(),
-
-                                                        "⚠️ Parking Expiry Alert",
-
-                                                        "Your parking expires in 15 minutes");
-                                }
+                                notificationService.sendAlert(
+                                                booking.getUserId(),
+                                                "⚠️ Parking Expiry Alert",
+                                                "Your parking expires in 15 minutes.",
+                                                NotificationType.PARKING_EXPIRY);
 
                                 booking.setExpiryAlertSent(true);
 
@@ -882,15 +1152,12 @@ public class BookingService {
         @Scheduled(fixedRate = 60000)
         public void sendStartNotifications() {
 
-                List<Booking> bookings = bookingRepository.findByStatus("BOOKED");
+                List<Booking> bookings = bookingRepository
+                                .findByStatusAndStartNotificationSentFalse("BOOKED");
 
                 LocalDateTime now = LocalDateTime.now();
 
                 for (Booking booking : bookings) {
-
-                        if (booking.isStartNotificationSent()) {
-                                continue;
-                        }
 
                         if (booking.getStartTime() == null) {
                                 continue;
@@ -903,22 +1170,11 @@ public class BookingService {
 
                         if (minutes >= 0 && minutes <= 1) {
 
-                                User user = userRepository
-                                                .findById(booking.getUserId())
-                                                .orElse(null);
-
-                                if (user != null &&
-                                                user.getFcmToken() != null &&
-                                                !user.getFcmToken().isEmpty()) {
-
-                                        firebaseNotificationService.sendNotification(
-
-                                                        user.getFcmToken(),
-
-                                                        "🚗 Booking Started",
-
-                                                        "Your booking has started. Please enter within 30 minutes.");
-                                }
+                                notificationService.sendAlert(
+                                                booking.getUserId(),
+                                                "🚗 Booking Started",
+                                                "Your booking has started. Please enter within 30 minutes.",
+                                                NotificationType.BOOKING_STARTED);
 
                                 booking.setStartNotificationSent(true);
 
@@ -958,23 +1214,11 @@ public class BookingService {
                                                 "⏰ Your parking time is over. You have a 15-minute grace period.");
                         }
 
-                        User user = null;
-
-                        if (booking.getUserId() != null) {
-                                user = userRepository
-                                                .findById(booking.getUserId())
-                                                .orElse(null);
-                        }
-
-                        if (user != null &&
-                                        user.getFcmToken() != null &&
-                                        !user.getFcmToken().isEmpty()) {
-
-                                firebaseNotificationService.sendNotification(
-                                                user.getFcmToken(),
-                                                "⏰ Parking Time Over",
-                                                "You have a 15-minute grace period before fines start.");
-                        }
+                        notificationService.sendAlert(
+                                        booking.getUserId(),
+                                        "⏰ Parking Time Over",
+                                        "You have a 15-minute grace period before fines start.",
+                                        NotificationType.PARKING_TIME_OVER);
 
                         if (booking.getPhoneNumber() != null &&
                                         !booking.getPhoneNumber().isBlank()) {
@@ -1030,27 +1274,11 @@ public class BookingService {
                                                                 + ". Current fine: ₹" + newFine);
                         }
 
-                        User user = null;
-
-                        if (booking.getUserId() != null) {
-                                user = userRepository
-                                                .findById(booking.getUserId())
-                                                .orElse(null);
-                        }
-
-                        if (user != null &&
-                                        user.getFcmToken() != null &&
-                                        !user.getFcmToken().isEmpty()) {
-
-                                try {
-                                        firebaseNotificationService.sendNotification(
-                                                        user.getFcmToken(),
-                                                        "Fine Updated",
-                                                        "Current fine: ₹" + newFine);
-                                } catch (Exception e) {
-                                        System.out.println("FCM failed: " + e.getMessage());
-                                }
-                        }
+                        notificationService.sendAlert(
+                                        booking.getUserId(),
+                                        "💰 Fine Updated",
+                                        "Current fine: ₹" + newFine,
+                                        NotificationType.FINE_UPDATED);
 
                         bookingRepository.save(booking);
                 }
@@ -1066,106 +1294,199 @@ public class BookingService {
                 double originalRefund = booking.getRefundAmount();
                 String originalReason = booking.getCancelReason();
 
-                Object lock = getLock(booking.getParkingId());
+                // ❌ prevent invalid cancel
+                if ("COMPLETED".equals(booking.getStatus())) {
+                        return "Cannot cancel completed booking";
+                }
 
-                synchronized (lock) {
+                if ("ACTIVE".equals(booking.getStatus())) {
+                        return "Cannot cancel after entry";
+                }
 
-                        // ❌ prevent invalid cancel
-                        if ("COMPLETED".equals(booking.getStatus())) {
-                                return "Cannot cancel completed booking";
+                if ("CANCELLED".equals(booking.getStatus())) {
+                        return "Already cancelled";
+                }
+
+                CancelPreviewResponse preview = calculateCancellationPreview(booking);
+
+                double bookingRefund = preview.getBookingFeeRefund();
+
+                double depositRefund = preview.getAssuranceDepositRefund();
+
+                double refund = preview.getTotalRefund();
+                try {
+
+                        // First cancel booking
+                        booking.setStatus("CANCELLED");
+                        booking.setCancelled(true);
+                        booking.setRefundAmount(refund);
+                        booking.setBookingFeeRefund(bookingRefund);
+                        booking.setAssuranceDepositRefund(depositRefund);
+                        if (refund == 0) {
+                                booking.setRefundStatus("NO_REFUND");
                         }
+                        booking.setCancelReason("USER");
 
-                        if ("ACTIVE".equals(booking.getStatus())) {
-                                return "Cannot cancel after entry";
-                        }
+                        bookingRepository.save(booking);
 
-                        if ("CANCELLED".equals(booking.getStatus())) {
-                                return "Already cancelled";
-                        }
+                        // bookingCapacityService.releaseSlot(
+                        // booking.getParkingId(),
+                        // booking.getStartTime().toLocalDate(),
+                        // booking.getVehicleType());
 
-                        LocalDateTime now = LocalDateTime.now();
-                        LocalDateTime start = booking.getStartTime();
+                        releaseBookingCapacity(booking);
 
-                        // ❌ cannot cancel after booking start time
-                        if (!now.isBefore(start)) {
-                                return "Cannot cancel after booking start time";
-                        }
+                        // Then try refund
+                        if ("PAID".equals(booking.getPaymentStatus())
+                                        && booking.getRazorpayPaymentId() != null
+                                        && refund > 0) {
 
-                        // Full refund before start time
-                        double refund = booking.getBookingFee()
-                                        + booking.getAssuranceDeposit();
+                                try {
 
-                        try {
+                                        String refundId = paymentService.refundPayment(
+                                                        booking.getRazorpayPaymentId(),
+                                                        refund);
 
-                                // First cancel booking
-                                booking.setStatus("CANCELLED");
-                                booking.setCancelled(true);
-                                booking.setRefundAmount(refund);
-                                booking.setCancelReason("USER");
+                                        booking.setRefundId(refundId);
+                                        booking.setRefundStatus("SUCCESS");
+                                        booking.setRefundTime(LocalDateTime.now());
+
+                                } catch (Exception e) {
+
+                                        booking.setRefundStatus("FAILED");
+                                }
 
                                 bookingRepository.save(booking);
 
-                                // Then try refund
-                                if ("PAID".equals(booking.getPaymentStatus())
-                                                && booking.getRazorpayPaymentId() != null) {
+                        }
 
-                                        try {
+                        waitlistService.notifyNextUser(
+                                        booking.getParkingId(),
+                                        booking.getVehicleType(),
+                                        booking.getStartTime().toLocalDate());
 
-                                                String refundId = paymentService.refundPayment(
-                                                                booking.getRazorpayPaymentId(),
-                                                                refund);
+                        notificationService.sendAlert(
+                                        booking.getUserId(),
+                                        "❌ Booking Cancelled",
+                                        "Your booking has been cancelled. Refund amount: ₹" + refund,
+                                        NotificationType.BOOKING_CANCELLED);
 
-                                                booking.setRefundId(refundId);
-                                                booking.setRefundStatus("SUCCESS");
-                                                booking.setRefundTime(LocalDateTime.now());
+                        // 🔥 STEP 2: RELEASE SLOTS
 
-                                        } catch (Exception e) {
+                        // 🔔 REALTIME
+                        realtimeService.sendDashboardUpdate("CANCELLED");
 
-                                                booking.setRefundStatus("FAILED");
-                                        }
+                        return "Cancelled successfully. Refund: ₹" + refund;
 
-                                        bookingRepository.save(booking);
+                } catch (Exception e) {
 
-                                }
+                        booking.setStatus(originalStatus);
+                        booking.setCancelled(originalCancelled);
+                        booking.setRefundAmount(originalRefund);
+                        booking.setCancelReason(originalReason);
 
-                                waitlistService.notifyNextUser(
-                                                booking.getParkingId(),
-                                                booking.getVehicleType(),
-                                                booking.getStartTime().toLocalDate());
+                        bookingRepository.save(booking);
 
-                                User user = userRepository
-                                                .findById(booking.getUserId())
-                                                .orElse(null);
+                        throw new RuntimeException("Cancellation failed. Please try again.");
+                }
 
-                                if (user != null &&
-                                                user.getFcmToken() != null &&
-                                                !user.getFcmToken().isEmpty()) {
+        }
 
-                                        firebaseNotificationService.sendNotification(
-                                                        user.getFcmToken(),
-                                                        "❌ Booking Cancelled",
-                                                        "Your booking has been cancelled. Refund amount: ₹" + refund);
-                                }
+        private CancelPreviewResponse calculateCancellationPreview(Booking booking) {
 
-                                // 🔥 STEP 2: RELEASE SLOTS
+                CancelPreviewResponse response = new CancelPreviewResponse();
 
-                                // 🔔 REALTIME
-                                realtimeService.sendDashboardUpdate("CANCELLED");
+                response.setBookingFee(booking.getBookingFee());
+                response.setAssuranceDeposit(booking.getAssuranceDeposit());
 
-                                return "Cancelled successfully. Refund: ₹" + refund;
+                LocalDateTime now = LocalDateTime.now();
+                LocalDateTime start = booking.getStartTime();
 
-                        } catch (Exception e) {
+                double bookingRefund = 0;
+                double depositRefund = 0;
 
-                                booking.setStatus(originalStatus);
-                                booking.setCancelled(originalCancelled);
-                                booking.setRefundAmount(originalRefund);
-                                booking.setCancelReason(originalReason);
+                long occupiedDays = Duration.between(
+                                booking.getStartTime().toLocalDate().atStartOfDay(),
+                                booking.getEndTime().toLocalDate().plusDays(1).atStartOfDay())
+                                .toDays();
 
-                                bookingRepository.save(booking);
+                boolean multiDay = occupiedDays > 1;
 
-                                throw new RuntimeException("Cancellation failed. Please try again.");
+                long minutesBeforeStart = Duration.between(now, start).toMinutes();
+
+                if (!multiDay) {
+
+                        if (minutesBeforeStart >= 24 * 60) {
+
+                                bookingRefund = booking.getBookingFee();
+                                depositRefund = booking.getAssuranceDeposit();
+
+                                response.setMessage("Full refund applicable.");
+
+                        } else if (minutesBeforeStart >= 0) {
+
+                                bookingRefund = booking.getBookingFee();
+                                depositRefund = 0;
+
+                                response.setMessage("Booking fee is refundable. Assurance deposit is non-refundable.");
+
+                        } else {
+
+                                response.setMessage("No refund is applicable.");
+                        }
+
+                } else {
+
+                        if (minutesBeforeStart >= 24 * 60) {
+
+                                bookingRefund = booking.getBookingFee();
+                                depositRefund = 0;
+
+                                response.setMessage("Booking fee is refundable. Assurance deposit is non-refundable.");
+
+                        } else if (minutesBeforeStart >= 0) {
+
+                                bookingRefund = booking.getBookingFee() * 0.5;
+                                depositRefund = 0;
+
+                                response.setMessage("50% booking fee refund applicable.");
+
+                        } else {
+
+                                response.setMessage("No refund is applicable.");
                         }
                 }
+
+                response.setBookingFeeRefund(bookingRefund);
+                response.setAssuranceDepositRefund(depositRefund);
+                response.setTotalRefund(bookingRefund + depositRefund);
+
+                return response;
+        }
+
+        public CancelPreviewResponse getCancelPreview(
+                        String bookingId,
+                        String userId) {
+
+                Booking booking = bookingRepository.findByBookingId(bookingId)
+                                .orElseThrow(() -> new RuntimeException("Booking not found"));
+
+                if (!booking.getUserId().equals(userId)) {
+                        throw new RuntimeException("Unauthorized");
+                }
+                if ("COMPLETED".equals(booking.getStatus())) {
+                        throw new RuntimeException("Cannot cancel completed booking");
+                }
+
+                if ("ACTIVE".equals(booking.getStatus())) {
+                        throw new RuntimeException("Cannot cancel after entry");
+                }
+
+                if ("CANCELLED".equals(booking.getStatus())) {
+                        throw new RuntimeException("Booking already cancelled");
+                }
+
+                return calculateCancellationPreview(booking);
         }
 
         @Scheduled(fixedRate = 60000)
@@ -1188,77 +1509,64 @@ public class BookingService {
                                 continue;
                         }
 
-                        Object lock = getLock(booking.getParkingId());
+                        // ⚠️ WARNING (ONLY ONCE)
+                        if (now.isAfter(booking.getStartTime().plusMinutes(15))
+                                        && booking.getCancelReason() == null) {
 
-                        synchronized (lock) {
+                                sendMessage(
+                                                booking.getUserId(),
+                                                "⚠️ Your booking will be cancelled soon");
 
-                                // ⚠️ WARNING (ONLY ONCE)
-                                if (now.isAfter(booking.getStartTime().plusMinutes(15))
-                                                && booking.getCancelReason() == null) {
+                                notificationService.sendAlert(
+                                                booking.getUserId(),
+                                                "⚠️ Booking Warning",
+                                                "Please enter soon or your booking will be cancelled.",
+                                                NotificationType.BOOKING_WARNING);
 
-                                        sendMessage(
-                                                        booking.getUserId(),
-                                                        "⚠️ Your booking will be cancelled soon");
+                                booking.setCancelReason("WARNED");
+                                bookingRepository.save(booking);
+                        }
 
-                                        User user = userRepository
-                                                        .findById(booking.getUserId())
-                                                        .orElse(null);
+                        // AUTO CANCEL
+                        if (now.isAfter(booking.getStartTime().plusMinutes(30))
+                                        && !"CANCELLED".equals(booking.getStatus())) {
 
-                                        if (user != null &&
-                                                        user.getFcmToken() != null &&
-                                                        !user.getFcmToken().isEmpty()) {
+                                // 🔥 STEP 1: UPDATE BOOKING
+                                booking.setStatus("CANCELLED");
+                                booking.setCancelled(true);
+                                booking.setRefundAmount(0);
+                                booking.setCancelReason("SYSTEM");
+                                booking.setRefundStatus("NO_SHOW");
 
-                                                firebaseNotificationService.sendNotification(
-                                                                user.getFcmToken(),
-                                                                "⚠️ Booking Warning",
-                                                                "Please enter soon or your booking will be cancelled.");
-                                        }
+                                bookingRepository.save(booking);
 
-                                        booking.setCancelReason("WARNED");
-                                        bookingRepository.save(booking);
-                                }
+                                // bookingCapacityService.releaseSlot(
+                                // booking.getParkingId(),
+                                // booking.getStartTime().toLocalDate(),
+                                // booking.getVehicleType());
 
-                                // AUTO CANCEL
-                                if (now.isAfter(booking.getStartTime().plusMinutes(30))
-                                                && !"CANCELLED".equals(booking.getStatus())) {
+                                releaseBookingCapacity(booking);
 
-                                        // 🔥 STEP 1: UPDATE BOOKING
-                                        booking.setStatus("CANCELLED");
-                                        booking.setCancelled(true);
-                                        booking.setRefundAmount(0);
-                                        booking.setCancelReason("SYSTEM");
-                                        booking.setRefundStatus("NO_SHOW");
+                                waitlistService.notifyNextUser(
+                                                booking.getParkingId(),
+                                                booking.getVehicleType(),
+                                                booking.getStartTime().toLocalDate());
 
-                                        bookingRepository.save(booking);
+                                // 🔔 REALTIME
+                                realtimeService.sendDashboardUpdate("CANCELLED");
 
-                                        waitlistService.notifyNextUser(
-                                                        booking.getParkingId(),
-                                                        booking.getVehicleType(),
-                                                        booking.getStartTime().toLocalDate());
+                                sendMessage(
+                                                booking.getUserId(),
+                                                " Booking cancelled. No refund");
 
-                                        // 🔔 REALTIME
-                                        realtimeService.sendDashboardUpdate("CANCELLED");
-
-                                        sendMessage(
-                                                        booking.getUserId(),
-                                                        " Booking cancelled. No refund");
-
-                                        User user = userRepository
-                                                        .findById(booking.getUserId())
-                                                        .orElse(null);
-
-                                        if (user != null &&
-                                                        user.getFcmToken() != null &&
-                                                        !user.getFcmToken().isEmpty()) {
-
-                                                firebaseNotificationService.sendNotification(
-                                                                user.getFcmToken(),
-                                                                " Booking Cancelled",
-                                                                "Your booking was automatically cancelled because you did not arrive on time.");
-                                        }
-                                }
+                                notificationService.sendAlert(
+                                                booking.getUserId(),
+                                                "❌ Booking Cancelled",
+                                                "Your booking was automatically cancelled because you did not arrive on time.",
+                                                NotificationType.AUTO_CANCELLED);
                         }
                 }
+
         }
 
         public List<Booking> getOvertimeBookings() {
@@ -1277,12 +1585,12 @@ public class BookingService {
                 List<Map<String, Object>> result = new ArrayList<>();
 
                 List<Booking> bookings = bookingRepository
-                                .findByParkingId(parkingId);
+                                .findByParkingIdAndStatus(
+                                                parkingId,
+                                                "ACTIVE");
 
                 for (Booking b : bookings) {
 
-                        if (!"ACTIVE".equals(b.getStatus()))
-                                continue;
                         if ("WALKIN".equalsIgnoreCase(b.getType()))
                                 continue;
 
@@ -1353,13 +1661,11 @@ public class BookingService {
 
                 List<Map<String, Object>> result = new ArrayList<>();
 
-                List<Booking> bookings = bookingRepository
-                                .findByParkingId(parkingId);
+                List<Booking> bookings = bookingRepository.findByParkingIdAndStatus(
+                                parkingId,
+                                "BOOKED");
 
                 for (Booking b : bookings) {
-
-                        if (!"BOOKED".equals(b.getStatus()))
-                                continue;
 
                         if (b.getEntryTime() != null)
                                 continue;
@@ -1443,13 +1749,11 @@ public class BookingService {
                                                         LocalDateTime.now())
                                         .toMinutes();
 
-                        double rate = "TWO_WHEELER"
-                                        .equals(booking.getVehicleType())
-                                                        ? parking.getBikeHourlyRate()
-                                                        : parking.getCarHourlyRate();
-
-                        amount = Math.ceil(
-                                        minutes / 60.0) * rate;
+                        amount = parkingTariffService.calculatePrice(
+                                        parking.getId(),
+                                        ParkingTariffService.WALKIN,
+                                        booking.getVehicleType(),
+                                        minutes);
                 }
 
                 res.put("bookingId",
@@ -1484,6 +1788,7 @@ public class BookingService {
                 return res;
         }
 
+        @Transactional
         public Booking markExitAndReturn(String bookingId) {
 
                 Booking booking = bookingRepository
@@ -1495,81 +1800,86 @@ public class BookingService {
                                 .orElseThrow();
                 LocalDateTime originalEndTime = booking.getEndTime();
 
-                Object lock = getLock(booking.getParkingId());
-
-                synchronized (lock) {
-
-                        // ❌ already exited
-                        if (booking.getExitTime() != null) {
-                                throw new ResponseStatusException(
-                                                HttpStatus.BAD_REQUEST, "Already exited");
-                        }
-
-                        // ❌ must be active
-                        if (!"ACTIVE".equals(booking.getStatus())) {
-                                throw new ResponseStatusException(
-                                                HttpStatus.BAD_REQUEST, "Vehicle not entered");
-                        }
-
-                        LocalDateTime now = LocalDateTime.now()
-                                        .withSecond(0)
-                                        .withNano(0);
-
-                        booking.setExitTime(now);
-
-                        if (!"WALKIN".equalsIgnoreCase(booking.getType())) {
-                                booking.setEndTime(now);
-                        }
-
-                        // 🔥 WALK-IN LOGIC
-                        if ("WALKIN".equalsIgnoreCase(booking.getType())) {
-
-                                long minutes = Duration
-                                                .between(booking.getEntryTime(), now)
-                                                .toMinutes();
-
-                                double rate = "TWO_WHEELER"
-                                                .equals(booking.getVehicleType())
-                                                                ? parking.getBikeHourlyRate()
-                                                                : parking.getCarHourlyRate();
-
-                                booking.setAmount(
-                                                Math.ceil(minutes / 60.0) * rate);
-                        } else {
-
-                                booking.setAmount(
-                                                booking.getBookingFee());
-
-                        }
-
-                        booking.setStatus("COMPLETED");
-
-                        try {
-
-                                Booking saved = bookingRepository.save(booking);
-
-                                realtimeService.sendDashboardUpdate("EXIT_MARKED");
-
-                                return saved;
-
-                        } catch (Exception e) {
-
-                                booking.setAmount(
-                                                booking.getBookingFee());
-
-                                booking.setExitTime(null);
-                                booking.setEndTime(originalEndTime);
-                                booking.setStatus("ACTIVE");
-
-                                bookingRepository.save(booking);
-
-                                throw new ResponseStatusException(
-                                                HttpStatus.BAD_REQUEST,
-                                                "Exit failed. Please try again.");
-                        }
+                // ❌ already exited
+                if (booking.getExitTime() != null) {
+                        throw new ResponseStatusException(
+                                        HttpStatus.BAD_REQUEST, "Already exited");
                 }
+
+                // ❌ must be active
+                if (!"ACTIVE".equals(booking.getStatus())) {
+                        throw new ResponseStatusException(
+                                        HttpStatus.BAD_REQUEST, "Vehicle not entered");
+                }
+
+                LocalDateTime now = LocalDateTime.now()
+                                .withSecond(0)
+                                .withNano(0);
+
+                booking.setExitTime(now);
+
+                if (!"WALKIN".equalsIgnoreCase(booking.getType())) {
+                        booking.setEndTime(now);
+                }
+
+                // 🔥 WALK-IN LOGIC
+                if ("WALKIN".equalsIgnoreCase(booking.getType())) {
+
+                        long minutes = Duration
+                                        .between(booking.getEntryTime(), now)
+                                        .toMinutes();
+
+                        booking.setAmount(
+                                        parkingTariffService.calculatePrice(
+                                                        parking.getId(),
+                                                        ParkingTariffService.WALKIN,
+                                                        booking.getVehicleType(),
+                                                        minutes));
+                } else {
+
+                        booking.setAmount(
+                                        booking.getBookingFee());
+
+                }
+
+                booking.setStatus("COMPLETED");
+
+                try {
+
+                        Booking saved = bookingRepository.save(booking);
+
+                        if (!"WALKIN".equalsIgnoreCase(saved.getType())) {
+
+                                // bookingCapacityService.releaseSlot(
+                                // saved.getParkingId(),
+                                // saved.getStartTime().toLocalDate(),
+                                // saved.getVehicleType());
+                                releaseBookingCapacity(saved);
+                        }
+
+                        realtimeService.sendDashboardUpdate("EXIT_MARKED");
+
+                        return saved;
+
+                } catch (Exception e) {
+
+                        booking.setAmount(
+                                        booking.getBookingFee());
+
+                        booking.setExitTime(null);
+                        booking.setEndTime(originalEndTime);
+                        booking.setStatus("ACTIVE");
+
+                        bookingRepository.save(booking);
+
+                        throw new ResponseStatusException(
+                                        HttpStatus.BAD_REQUEST,
+                                        "Exit failed. Please try again.");
+                }
+
         }
 
+        @Transactional
         public Booking markExitByVehicle( // Guard App (operations screen m2 ,m3 , m5)
                         String vehicleNumber,
                         String parkingId,
@@ -1650,6 +1960,7 @@ public class BookingService {
 
         }
 
+        @Transactional
         public Booking markExitByVehicle(String vehicleNumber) {
 
                 Booking booking = bookingRepository
@@ -1696,12 +2007,11 @@ public class BookingService {
                                         .withNano(0);
 
                         long activeWalkins = bookingRepository
-                                        .findByParkingId(parkingId)
-                                        .stream()
-                                        .filter(b -> "ACTIVE".equals(b.getStatus()))
-                                        .filter(b -> "WALKIN".equalsIgnoreCase(b.getType()))
-                                        .filter(b -> vehicleType.equals(b.getVehicleType()))
-                                        .count();
+                                        .countByParkingIdAndVehicleTypeAndTypeAndStatus(
+                                                        parkingId,
+                                                        vehicleType,
+                                                        "WALKIN",
+                                                        "ACTIVE");
                         int walkinCapacity = Math.max(
                                         0,
                                         "TWO_WHEELER".equals(vehicleType)
@@ -1742,8 +2052,9 @@ public class BookingService {
 
                         } catch (Exception e) {
 
-                                throw new ResponseStatusException(
-                                                HttpStatus.BAD_REQUEST, "Walk-in failed. Try again.");
+                                e.printStackTrace();
+
+                                throw new RuntimeException(e);
                         }
                 }
         }
@@ -1951,13 +2262,60 @@ public class BookingService {
                 result.put("entryTime", booking.getEntryTime());
                 result.put("exitTime", booking.getExitTime());
 
-                result.put(
-                                "phoneNumber",
-                                user != null
-                                                ? user.getPhoneNumber()
-                                                : booking.getPhoneNumber());
+                result.put("phoneNumber", booking.getPhoneNumber());
 
                 return result;
+        }
+
+        public OperationLookupResponse lookupVehicleOperation(
+                        String vehicleNumber,
+                        String parkingId) {
+
+                OperationLookupResponse response = new OperationLookupResponse();
+
+                // 1️⃣ BOOKED → ENTRY
+                Booking booked = bookingRepository
+                                .findTopByVehicleNumberAndParkingIdAndStatusInOrderByStartTimeAsc(
+                                                vehicleNumber,
+                                                parkingId,
+                                                List.of("BOOKED"))
+                                .orElse(null);
+
+                if (booked != null) {
+
+                        response.setAction("ENTRY");
+                        response.setVehicleNumber(vehicleNumber);
+                        response.setBookingId(booked.getBookingId());
+                        response.setBookingDetails(
+                                        getBookingDetails(booked.getBookingId()));
+
+                        return response;
+                }
+
+                // 2️⃣ ACTIVE → EXIT
+                Booking active = bookingRepository
+                                .findTopByVehicleNumberAndParkingIdAndStatusInOrderByStartTimeAsc(
+                                                vehicleNumber,
+                                                parkingId,
+                                                List.of("ACTIVE"))
+                                .orElse(null);
+
+                if (active != null) {
+
+                        response.setAction("EXIT");
+                        response.setVehicleNumber(vehicleNumber);
+                        response.setBookingId(active.getBookingId());
+                        response.setBookingDetails(
+                                        getBookingDetails(active.getBookingId()));
+
+                        return response;
+                }
+
+                // 3️⃣ No booking → WALK-IN
+                response.setAction("WALKIN");
+                response.setVehicleNumber(vehicleNumber);
+
+                return response;
         }
 
         // ✅ TOTAL REVENUE

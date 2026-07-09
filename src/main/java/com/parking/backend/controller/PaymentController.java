@@ -1,12 +1,16 @@
 package com.parking.backend.controller;
 
+import com.parking.backend.dto.WebhookResult;
 import com.parking.backend.model.Booking;
 import com.parking.backend.model.Parking;
 import com.parking.backend.repository.BookingRepository;
 import com.parking.backend.repository.ParkingRepository;
 import com.parking.backend.service.PaymentService;
+import com.parking.backend.service.WebhookService;
+import com.parking.backend.dto.WebhookResult;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,21 +27,26 @@ public class PaymentController {
         private final PaymentService paymentService;
         private final BookingRepository bookingRepository;
         private final ParkingRepository parkingRepository;
+        private final WebhookService webhookService;
 
         public PaymentController(
                         PaymentService paymentService,
                         BookingRepository bookingRepository,
-                        ParkingRepository parkingRepository) {
+                        ParkingRepository parkingRepository,
+                        WebhookService webhookService) {
 
                 this.paymentService = paymentService;
                 this.bookingRepository = bookingRepository;
                 this.parkingRepository = parkingRepository;
+                this.webhookService = webhookService;
         }
 
-        @PostMapping("/create-order") // User App (booking screen m8)
-        public String createOrder(@RequestParam double amount) {
+        @PostMapping("/create-order")
+        public String createOrder(
+                        @RequestParam String bookingId) {
 
-                return paymentService.createOrder(amount);
+                return paymentService.createOrder(
+                                bookingId);
         }
 
         @PostMapping("/verify") // User App (booking screen m4)
@@ -52,37 +61,33 @@ public class PaymentController {
                                 razorpay_signature);
         }
 
-        // @GetMapping("/test-refund")
-        // public String testRefund(
-        //                 @RequestParam String paymentId,
-        //                 @RequestParam double amount) {
-
-        //         log.info("Test refund requested. PaymentId={}", paymentId);
-
-        //         return paymentService.refundPayment(
-        //                         paymentId,
-        //                         amount);
-        // }
-
         @PostMapping("/webhook")
         public String handleWebhook(
                         @RequestBody String payload,
                         @RequestHeader(value = "X-Razorpay-Signature", required = false) String signature) {
 
-                try {
-
-                        JSONObject json = new JSONObject(payload);
-
-                        String event = json.getString("event");
-
-                        log.info("Webhook received. Event={}", event);
-
-                } catch (Exception e) {
-
-                        e.printStackTrace();
+                if (signature == null || signature.isBlank()) {
+                        throw new RuntimeException("Missing webhook signature");
                 }
 
-                return "OK";
+                boolean verified = webhookService.verifyWebhookSignature(
+                                payload,
+                                signature);
+
+                if (!verified) {
+                        throw new RuntimeException("Invalid webhook signature");
+                }
+
+                log.info("✅ Razorpay webhook verified");
+
+                WebhookResult result = webhookService.processWebhook(payload);
+
+                if (result.isRetry()) {
+                        throw new RuntimeException(
+                                        result.getMessage());
+                }
+
+                return result.getMessage();
         }
 
         @PostMapping("/create-fine-order")
@@ -205,5 +210,25 @@ public class PaymentController {
                                 orderId,
                                 paymentId,
                                 signature);
+        }
+
+        @PostMapping("/create-exit-payment-link")
+        public String createExitPaymentLink(
+                        @RequestParam String bookingId) {
+
+                return paymentService.createExitPaymentLink(bookingId);
+        }
+
+        @GetMapping("/status/{bookingId}")
+        public Map<String, Object> getPaymentStatus(
+                        @PathVariable String bookingId) {
+
+                Booking booking = bookingRepository
+                                .findByBookingId(bookingId)
+                                .orElseThrow(() -> new RuntimeException("Booking not found"));
+
+                return Map.of(
+                                "paid",
+                                "PAID".equals(booking.getPaymentLinkStatus()));
         }
 }

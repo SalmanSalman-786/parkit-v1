@@ -3,10 +3,10 @@ package com.parking.backend.service;
 import com.parking.backend.model.RefreshToken;
 import com.parking.backend.repository.RefreshTokenRepository;
 
+import jakarta.transaction.Transactional;
+
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-
-
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -78,13 +78,20 @@ public class RefreshTokenService {
                                 + refreshTokenRepository.count());
         }
 
-        @Scheduled(cron = "0 0 2 * * *")
+        @Scheduled(cron = "0 0 2 * * ?")
+        @Transactional
         public void cleanupExpiredTokens() {
 
                 refreshTokenRepository.deleteByExpiryDateBefore(
                                 LocalDateTime.now());
 
-                System.out.println(
-                                "🧹 Expired refresh tokens cleaned");
+                refreshTokenRepository.deleteByRevokedTrue();
+
+                System.out.println("🧹 Refresh tokens cleaned");
+        }
+
+        public void revokeAllUserTokens(String userId) {
+
+                refreshTokenRepository.revokeAllByUserId(userId);
         }
 }

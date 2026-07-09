@@ -1,16 +1,18 @@
 package com.parking.backend.controller;
 
+import com.parking.backend.dto.NearbyParkingResponse;
 import com.parking.backend.model.Parking;
 import com.parking.backend.service.ParkingService;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.security.core.Authentication;
 
 import org.springframework.web.multipart.MultipartFile;
+import jakarta.validation.Valid;
 
 import java.util.List;
 
 @RestController
-@CrossOrigin("*") // 🔥 ADD THIS LINE
+//@CrossOrigin("*") // 🔥 ADD THIS LINE
 @RequestMapping("/api/parking")
 public class ParkingController {
 
@@ -21,8 +23,9 @@ public class ParkingController {
     }
 
     @PostMapping
-    public Parking createParking(@RequestBody Parking parking,
-            org.springframework.security.core.Authentication auth) { // Admin Website (Add parking m1)
+    public Parking createParking(
+            @Valid @RequestBody Parking parking,
+            Authentication auth) { // Admin Website (Add parking m1)
 
         if (!auth.getAuthorities().stream()
                 .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"))) {
@@ -44,8 +47,8 @@ public class ParkingController {
         return parkingService.getAllParkings(page, size);
     }
 
-    @GetMapping("/nearby") // User App (Home m2)
-    public List<Parking> getNearby(
+    @GetMapping("/nearby")
+    public NearbyParkingResponse getNearby(
             @RequestParam double lat,
             @RequestParam double lng) {
 
@@ -60,7 +63,7 @@ public class ParkingController {
     @PutMapping("/{id}") // Admin Website (Editparking m2)
     public Parking updateParking(
             @PathVariable String id,
-            @RequestBody Parking parking,
+            @Valid @RequestBody Parking parking,
             Authentication auth) {
 
         if (!auth.getAuthorities().stream()

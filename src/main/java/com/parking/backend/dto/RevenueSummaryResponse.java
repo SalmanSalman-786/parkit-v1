@@ -8,25 +8,23 @@ public class RevenueSummaryResponse {
 
     private LocalDate date;
 
-    private double totalRevenue;
+    // Booking Revenue
+    private double bookingFee;
 
-    private double onlineRevenue;
+    private double bookingFeeRefund;
 
-    private double cashRevenue;
+    // Assurance Deposit
+    private double assuranceDeposit;
+
+    private double assuranceDepositRefund;
+
+    // Other Revenue
+    private double walkinRevenue;
 
     private double fineRevenue;
 
-    private double refundAmount;
-
-    private long transactionCount;
-
+    // Summary
     private double netRevenue;
 
-    public double getNetRevenue() {
-        return netRevenue;
-    }
-
-    public void setNetRevenue(double netRevenue) {
-        this.netRevenue = netRevenue;
-    }
+    private long transactionCount;
 }

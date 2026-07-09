@@ -5,8 +5,11 @@ import com.parking.backend.repository.UserRepository;
 import com.parking.backend.security.JwtUtil;
 import com.parking.backend.service.AuthService;
 import com.parking.backend.dto.UserLoginRequest;
+import com.parking.backend.dto.AdminLoginRequest;
+import com.parking.backend.dto.GuardLoginRequest;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
 
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -14,7 +17,7 @@ import java.util.Map;
 
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
-import com.parking.backend.service.PushNotificationService;
+
 import com.parking.backend.service.RefreshTokenService;
 import com.parking.backend.model.RefreshToken;
 import com.parking.backend.dto.LogoutRequest;
@@ -25,10 +28,13 @@ import org.springframework.beans.factory.annotation.Value;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseToken;
 
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+
 import java.util.concurrent.ConcurrentHashMap;
 
 @RestController
-@CrossOrigin("*")
+//@CrossOrigin("*")
 @RequestMapping("/api/auth")
 public class AuthController {
 
@@ -40,8 +46,6 @@ public class AuthController {
 
         private final UserRepository userRepository;
 
-        private final PushNotificationService pushNotificationService;
-
         private final RefreshTokenService refreshTokenService;
 
         private final Map<String, Integer> loginAttempts = new ConcurrentHashMap<>();
@@ -50,13 +54,13 @@ public class AuthController {
         private String adminRegistrationKey;
 
         AuthController(AuthService authService, JwtUtil jwtUtil, PasswordEncoder passwordEncoder,
-                        UserRepository userRepository, PushNotificationService pushNotificationService,
+                        UserRepository userRepository,
                         RefreshTokenService refreshTokenService) {
                 this.authService = authService;
                 this.jwtUtil = jwtUtil;
                 this.passwordEncoder = passwordEncoder;
                 this.userRepository = userRepository;
-                this.pushNotificationService = pushNotificationService;
+
                 this.refreshTokenService = refreshTokenService;
         }
 
@@ -74,7 +78,7 @@ public class AuthController {
 
         @PostMapping("/login")
         public Map<String, Object> login(
-                        @RequestBody UserLoginRequest request) {
+                        @Valid @RequestBody UserLoginRequest request) {
 
                 // 🔥 INPUT VALIDATION
                 if (request.getPhoneNumber() == null || request.getPhoneNumber().isEmpty()) {
@@ -108,18 +112,23 @@ public class AuthController {
                                         "Invalid Firebase token");
                 }
 
-                User user = authService.login(request.getPhoneNumber());
+                User user = authService.login(
+                                request.getPhoneNumber(),
+                                request.getName());
 
-                if ((user.getName() == null || user.getName().isEmpty())
-                                && request.getName() != null && !request.getName().isEmpty()) {
+                // if ((user.getName() == null || user.getName().isEmpty())
+                //                 && request.getName() != null && !request.getName().isEmpty()) {
 
-                        user.setName(request.getName());
-                        authService.saveUser(user);
-                }
+                //         user.setName(request.getName());
+                //         authService.saveUser(user);
+                // }
 
                 String accessToken = jwtUtil.generateToken(
                                 user.getId(),
                                 user.getRole());
+
+                refreshTokenService.revokeAllUserTokens(
+                                user.getId());
 
                 RefreshToken refreshToken = refreshTokenService.createRefreshToken(
                                 user.getId());
@@ -151,7 +160,7 @@ public class AuthController {
 
         @PostMapping("/logout")
         public String logout(
-                        @RequestBody LogoutRequest request) {
+                        @Valid @RequestBody LogoutRequest request) {
 
                 System.out.println("🔥 LOGOUT CALLED");
                 System.out.println(request.getRefreshToken());
@@ -210,7 +219,8 @@ public class AuthController {
         }
 
         @PostMapping("/guard/login") // Guard App (login m1)
-        public Map<String, Object> guardLogin(@RequestBody User request) {
+        public Map<String, Object> guardLogin(
+                        @Valid @RequestBody GuardLoginRequest request) {
 
                 checkLoginAttempts(
                                 request.getUsername());
@@ -240,6 +250,9 @@ public class AuthController {
                                 user.getId(),
                                 user.getRole());
 
+                refreshTokenService.revokeAllUserTokens(
+                                user.getId());
+
                 RefreshToken refreshToken = refreshTokenService.createRefreshToken(
                                 user.getId());
 
@@ -265,7 +278,8 @@ public class AuthController {
         }
 
         @PostMapping("/admin/login") // Admin Website (login m1)
-        public Map<String, Object> adminLogin(@RequestBody User request) {
+        public Map<String, Object> adminLogin(
+                        @Valid @RequestBody AdminLoginRequest request) {
 
                 User user = userRepository.findByUsername(request.getUsername())
                                 .orElseThrow(() -> new RuntimeException("User not found"));
@@ -312,6 +326,9 @@ public class AuthController {
                                 user.getId(),
                                 user.getRole());
 
+                refreshTokenService.revokeAllUserTokens(
+                                user.getId());
+
                 RefreshToken refreshToken = refreshTokenService.createRefreshToken(
                                 user.getId());
 
@@ -348,37 +365,15 @@ public class AuthController {
                 return "FCM token saved";
         }
 
-        @PostMapping("/test-notification")
-        public String testNotification(
-                        HttpServletRequest request) {
-
-                String userId = (String) request.getAttribute("userId");
-
-                if (userId == null) {
-                        return "User not authenticated";
-                }
-
-                User user = userRepository.findById(userId)
-                                .orElseThrow(() -> new RuntimeException("User not found"));
-
-                if (user.getFcmToken() == null ||
-                                user.getFcmToken().isEmpty()) {
-
-                        throw new RuntimeException("FCM token not found");
-                }
-
-                pushNotificationService.sendPushNotification(
-                                user.getFcmToken(),
-                                "🚗 ParkIt Notification",
-                                "Push notifications are working!");
-
-                return "Notification sent";
-        }
-
         @PostMapping("/refresh")
         public Map<String, Object> refreshToken(
-                        @RequestBody RefreshRequest request) {
+                        @Valid @RequestBody RefreshRequest request) {
 
+                String time = LocalDateTime.now()
+                                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+
+                System.out.println("======================================");
+                System.out.println("🕒 Time      : " + time);
                 System.out.println("🔥 REFRESH ENDPOINT HIT");
 
                 RefreshToken refreshToken = refreshTokenService
@@ -395,11 +390,14 @@ public class AuthController {
                                         "Refresh token expired");
                 }
                 System.out.println("🔥 REFRESH TOKEN VALID");
+                System.out.println("👤 USER ID: " + refreshToken.getUserId());
 
                 User user = userRepository.findById(
                                 refreshToken.getUserId())
                                 .orElseThrow(() -> new RuntimeException(
                                                 "User not found"));
+
+                System.out.println("📱 USER ROLE: " + user.getRole());
                 String accessToken = jwtUtil.generateToken(
                                 user.getId(),
                                 user.getRole());
@@ -419,6 +417,7 @@ public class AuthController {
                 response.put(
                                 "refreshToken",
                                 newRefreshToken.getToken());
+                System.out.println("======================================");
 
                 return response;
         }

@@ -1,5 +1,7 @@
 package com.parking.backend.controller;
 
+import com.parking.backend.dto.CancelPreviewResponse;
+import com.parking.backend.dto.OperationLookupResponse;
 import com.parking.backend.model.Booking;
 
 import com.parking.backend.repository.BookingRepository;
@@ -18,8 +20,10 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import jakarta.validation.Valid;
+
 @RestController
-@CrossOrigin("*")
+//@CrossOrigin("*")
 @RequestMapping("/api/booking")
 public class BookingController {
 
@@ -33,8 +37,11 @@ public class BookingController {
     }
 
     // ✅ CREATE BOOKING (USER)
+
     @PostMapping
-    public Booking bookSlot(@RequestBody Booking booking, Authentication auth) {    // User App (booking screen m7)
+    public Booking bookSlot(
+            @Valid @RequestBody Booking booking,
+            Authentication auth) { // User App (booking screen m7)
 
         String userId = auth.getName();
         booking.setUserId(userId);
@@ -117,7 +124,7 @@ public class BookingController {
         return bookingService.getOvertimeBookings();
     }
 
-    @GetMapping("/overstayed/{parkingId}")   //Guard App (monitoring screen m4 + overstayed screen m1)
+    @GetMapping("/overstayed/{parkingId}") // Guard App (monitoring screen m4 + overstayed screen m1)
     public List<Map<String, Object>> getOverstayedVehicles(
             @PathVariable String parkingId) {
 
@@ -126,7 +133,7 @@ public class BookingController {
     }
 
     // 👤 USER BOOKINGS (SAFE)
-    @GetMapping("/user/{userId}")                     // User App  (booking screen m1 + my booking m1 + profile m1)
+    @GetMapping("/user/{userId}") // User App (booking screen m1 + my booking m1 + profile m1)
     public List<Booking> getUserBookings(@PathVariable String userId,
             Authentication auth) {
 
@@ -140,7 +147,7 @@ public class BookingController {
     }
 
     // 👤 USER HISTORY (FIXED 🔥)
-    @GetMapping("/user/{userId}/history")        // User App (my history m1)
+    @GetMapping("/user/{userId}/history") // User App (my history m1)
     public List<Booking> getUserHistory(@PathVariable String userId,
             Authentication auth) {
 
@@ -203,8 +210,18 @@ public class BookingController {
         return bookingService.getBookingDetails(bookingId);
     }
 
+    @GetMapping("/cancel-preview/{bookingId}")
+    public CancelPreviewResponse getCancelPreview(
+            @PathVariable String bookingId,
+            Authentication authentication) {
+
+        return bookingService.getCancelPreview(
+                bookingId,
+                authentication.getName());
+    }
+
     // ❌ CANCEL (SAFE)
-    @PutMapping("/cancel/{bookingId}")           // User App (my booking m2)
+    @PutMapping("/cancel/{bookingId}") // User App (my booking m2)
     public Map<String, Object> cancelBooking(@PathVariable String bookingId,
             Authentication auth) {
 
@@ -240,14 +257,14 @@ public class BookingController {
         return bookingService.getLiveBookings();
     }
 
-    @GetMapping("/not-entered/{parkingId}")  // Guard App (not entered screen m1)
+    @GetMapping("/not-entered/{parkingId}") // Guard App (not entered screen m1)
     public List<Map<String, Object>> getNotEntered(
             @PathVariable String parkingId) {
 
         return bookingService.getNotEntered(parkingId);
     }
 
-    @PostMapping("/walkin/entry")  // Guard App (walkin screen m1)
+    @PostMapping("/walkin/entry") // Guard App (walkin screen m1)
     public Booking walkinEntry(@RequestBody Map<String, String> req,
             Authentication auth) {
 
@@ -283,7 +300,7 @@ public class BookingController {
         return bookingService.getActiveWalkins(); // always list
     }
 
-    @PostMapping("/confirm-payment")        // User App (booking screen m5)
+    @PostMapping("/confirm-payment") // User App (booking screen m5)
     public Booking confirmPayment(
             @RequestParam String bookingId,
             @RequestParam String paymentId,
@@ -295,7 +312,7 @@ public class BookingController {
                 orderId);
     }
 
-    @PutMapping("/entry/vehicle/{vehicleNumber}/{parkingId}")   // Guard App (operations m8)
+    @PutMapping("/entry/vehicle/{vehicleNumber}/{parkingId}") // Guard App (operations m8)
     public String markEntryByVehicle(
             @PathVariable String vehicleNumber,
             @PathVariable String parkingId) {
@@ -310,7 +327,7 @@ public class BookingController {
         return bookingService.markExitByVehicle(vehicleNumber);
     }
 
-    @GetMapping("/details/vehicle/{vehicleNumber}/{parkingId}")    // Guard App (operations screen m7)
+    @GetMapping("/details/vehicle/{vehicleNumber}/{parkingId}") // Guard App (operations screen m7)
     public Map<String, Object> getBookingByVehicle(
             @PathVariable String vehicleNumber,
             @PathVariable String parkingId,
@@ -342,6 +359,16 @@ public class BookingController {
         return bookingService.getBookingDetails(booking.getBookingId());
     }
 
+    @GetMapping("/operation-lookup")
+    public OperationLookupResponse lookupVehicleOperation(
+            @RequestParam String vehicleNumber,
+            @RequestParam String parkingId) {
+
+        return bookingService.lookupVehicleOperation(
+                vehicleNumber,
+                parkingId);
+    }
+
     @GetMapping("/walkin/active/{parkingId}")
     public List<Booking> getActiveWalkins(
             @PathVariable String parkingId,
@@ -369,16 +396,16 @@ public class BookingController {
                         parkingId);
     }
 
-    @PostMapping("/validate")          //User App (booking screen m6)
+    @PostMapping("/validate")
     public ResponseEntity<?> validateBooking(
-            @RequestBody Booking booking) {
+            @Valid @RequestBody Booking booking) {
 
         bookingService.validateBooking(booking);
 
         return ResponseEntity.ok().build();
     }
 
-    @PutMapping("/exit/vehicle/{vehicleNumber}/{parkingId}/{mode}")   // Guard App (operations screen m2 ,m3 , m5)
+    @PutMapping("/exit/vehicle/{vehicleNumber}/{parkingId}/{mode}") // Guard App (operations screen m2 ,m3 , m5)
     public Booking markExitByVehicle(
             @PathVariable String vehicleNumber,
             @PathVariable String parkingId,
@@ -391,7 +418,7 @@ public class BookingController {
                         mode);
     }
 
-    @GetMapping("/exit-preview/{vehicleNumber}/{parkingId}")    // Guard App (operations screen m1)
+    @GetMapping("/exit-preview/{vehicleNumber}/{parkingId}") // Guard App (operations screen m1)
     public Map<String, Object> exitPreview(
             @PathVariable String vehicleNumber,
             @PathVariable String parkingId) {
@@ -402,7 +429,7 @@ public class BookingController {
     }
 
     @GetMapping("/capacity-breakdown")
-    public Map<String, Object> getCapacityBreakdown(         // User App m3 (details)
+    public Map<String, Object> getCapacityBreakdown( // User App m3 (details)
             @RequestParam String parkingId,
             @RequestParam String vehicleType) {
 
@@ -411,7 +438,7 @@ public class BookingController {
                 vehicleType);
     }
 
-    @GetMapping("/availability")               // User App (booking screen m2)
+    @GetMapping("/availability") // User App (booking screen m2)
     public Map<String, Object> getAvailability(
             @RequestParam String parkingId,
             @RequestParam String vehicleType,
@@ -423,7 +450,25 @@ public class BookingController {
                 LocalDate.parse(date));
     }
 
-    @GetMapping("/price-preview")               // User App (booking screen m3)
+    @GetMapping("/availability-range")
+    public Map<String, Object> getAvailabilityForRange(
+
+            @RequestParam String parkingId,
+
+            @RequestParam String vehicleType,
+
+            @RequestParam String startTime,
+
+            @RequestParam String endTime) {
+
+        return bookingService.getAvailabilityForRange(
+                parkingId,
+                vehicleType,
+                LocalDateTime.parse(startTime),
+                LocalDateTime.parse(endTime));
+    }
+
+    @GetMapping("/price-preview") // User App (booking screen m3)
     public Map<String, Object> getPricePreview(
 
             @RequestParam String parkingId,
@@ -445,7 +490,7 @@ public class BookingController {
                 LocalDateTime.parse(endTime));
     }
 
-    @GetMapping("/long-stay-walkins")    // Guard App (longstaywalkin m1 + monitoring screen m7)
+    @GetMapping("/long-stay-walkins") // Guard App (longstaywalkin m1 + monitoring screen m7)
     public ResponseEntity<?> getLongStayWalkins(
             @RequestParam String parkingId) {
 

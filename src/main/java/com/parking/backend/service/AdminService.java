@@ -3,6 +3,7 @@ package com.parking.backend.service;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,113 +32,107 @@ public class AdminService {
                 this.parkingRepository = parkingRepository;
         }
 
-        public RevenueSummaryResponse getRevenueSummary( // Admin Website (dashboard m1 + Revenue m1)
-                        LocalDate date) {
+        public RevenueSummaryResponse getRevenueSummary(LocalDate date) {
 
                 RevenueSummaryResponse res = new RevenueSummaryResponse();
 
                 res.setDate(date);
 
                 List<Booking> completedBookings = bookingRepository.findByStatus("COMPLETED");
-
                 List<Booking> cancelledBookings = bookingRepository.findByStatus("CANCELLED");
 
-                double totalRevenue = 0;
-                double onlineRevenue = 0;
-                double cashRevenue = 0;
+                double bookingFee = 0;
+                double bookingFeeRefund = 0;
+
+                double assuranceDeposit = 0;
+                double assuranceDepositRefund = 0;
+
+                double walkinRevenue = 0;
                 double fineRevenue = 0;
-                double refundAmount = 0;
 
                 long transactionCount = 0;
 
+                // ===========================
+                // COMPLETED BOOKINGS
+                // ===========================
                 for (Booking booking : completedBookings) {
 
                         if (booking.getExitTime() == null) {
                                 continue;
                         }
 
-                        if (!booking.getExitTime()
-                                        .toLocalDate()
-                                        .equals(date)) {
+                        if (!booking.getExitTime().toLocalDate().equals(date)) {
                                 continue;
                         }
 
                         transactionCount++;
 
-                        double amount = booking.getAmount();
+                        if ("BOOKING".equalsIgnoreCase(booking.getType())) {
 
-                        double fine = booking.getCollectedFineAmount();
+                                bookingFee += booking.getBookingFee();
 
-                        totalRevenue += amount + fine;
+                                assuranceDeposit += booking.getAssuranceDeposit();
 
-                        fineRevenue += fine;
-
-                        if ("ONLINE".equalsIgnoreCase(booking.getPaymentMode())) {
-                                onlineRevenue += amount;
+                                assuranceDepositRefund += booking.getAssuranceDepositRefund();
                         }
 
-                        if ("CASH".equalsIgnoreCase(booking.getPaymentMode())) {
-                                cashRevenue += amount;
+                        if ("WALKIN".equalsIgnoreCase(booking.getType())) {
+
+                                walkinRevenue += booking.getAmount();
                         }
 
-                        if ("ONLINE".equalsIgnoreCase(booking.getFinePaymentMode())) {
-                                onlineRevenue += fine;
-                        }
+                        if (booking.isFinePaid()) {
 
-                        if ("CASH".equalsIgnoreCase(booking.getFinePaymentMode())) {
-                                cashRevenue += fine;
+                                fineRevenue += booking.getCollectedFineAmount();
                         }
                 }
 
+                // ===========================
+                // CANCELLED BOOKINGS
+                // ===========================
                 for (Booking booking : cancelledBookings) {
 
                         if (booking.getRefundTime() == null) {
                                 continue;
                         }
 
-                        if (!booking.getRefundTime()
-                                        .toLocalDate()
-                                        .equals(date)) {
+                        if (!booking.getRefundTime().toLocalDate().equals(date)) {
                                 continue;
                         }
-
-                        if (booking.getRefundAmount() > 0) {
-                                refundAmount += booking.getRefundAmount();
-                                transactionCount++;
-                        }
-                }
-                for (Booking booking : cancelledBookings) {
-
-                        if (!"NO_SHOW".equals(booking.getRefundStatus())) {
-                                continue;
-                        }
-
-                        if (booking.getStartTime() == null) {
-                                continue;
-                        }
-
-                        if (!booking.getStartTime()
-                                        .toLocalDate()
-                                        .equals(date)) {
-                                continue;
-                        }
-
-                        totalRevenue += booking.getAmount();
-                        onlineRevenue += booking.getAmount();
 
                         transactionCount++;
+
+                        bookingFee += booking.getBookingFee();
+
+                        assuranceDeposit += booking.getAssuranceDeposit();
+
+                        bookingFeeRefund += booking.getBookingFeeRefund();
+
+                        assuranceDepositRefund += booking.getAssuranceDepositRefund();
                 }
 
-                res.setTotalRevenue(totalRevenue);
-                res.setOnlineRevenue(onlineRevenue);
-                res.setCashRevenue(cashRevenue);
+                // ===========================
+                // NET REVENUE
+                // ===========================
+                double netRevenue = bookingFee
+                                + assuranceDeposit
+                                + walkinRevenue
+                                + fineRevenue
+                                - bookingFeeRefund
+                                - assuranceDepositRefund;
+
+                res.setBookingFee(bookingFee);
+                res.setBookingFeeRefund(bookingFeeRefund);
+
+                res.setAssuranceDeposit(assuranceDeposit);
+                res.setAssuranceDepositRefund(assuranceDepositRefund);
+
+                res.setWalkinRevenue(walkinRevenue);
+
                 res.setFineRevenue(fineRevenue);
-                double netRevenue = Math.max(
-                                0,
-                                totalRevenue - refundAmount);
 
                 res.setNetRevenue(netRevenue);
-                res.setRefundAmount(refundAmount);
+
                 res.setTransactionCount(transactionCount);
 
                 return res;
@@ -212,38 +207,32 @@ public class AdminService {
                         }
 
                         // =====================
-                        // BOOKING TRANSACTION
+                        // BOOKING FEE
                         // =====================
 
-                        if (booking.getAmount() > 0) {
+                        if ("BOOKING".equalsIgnoreCase(booking.getType())
+                                        && booking.getBookingFee() > 0) {
 
                                 RevenueTransactionDto dto = new RevenueTransactionDto();
 
-                                dto.setBookingId(
-                                                booking.getBookingId());
+                                dto.setBookingId(booking.getBookingId());
 
-                                dto.setVehicleNumber(
-                                                booking.getVehicleNumber());
+                                dto.setVehicleNumber(booking.getVehicleNumber());
 
-                                dto.setDateTime(
-                                                booking.getExitTime());
+                                dto.setDateTime(booking.getPaymentTime());
 
-                                dto.setTransactionType(
-                                                "BOOKING");
+                                dto.setTransactionType("BOOKING_FEE");
 
                                 dto.setPaymentMode(
                                                 "PREPAID".equalsIgnoreCase(booking.getPaymentMode())
                                                                 ? "PREPAID (ONLINE)"
                                                                 : booking.getPaymentMode());
 
-                                dto.setAmount(
-                                                booking.getAmount());
+                                dto.setAmount(booking.getBookingFee());
 
-                                dto.setParkingId(
-                                                booking.getParkingId());
+                                dto.setParkingId(booking.getParkingId());
 
-                                dto.setParkingName(
-                                                booking.getParkingName());
+                                dto.setParkingName(booking.getParkingName());
 
                                 if (matchesFilter(dto, filter)) {
                                         result.add(dto);
@@ -251,36 +240,32 @@ public class AdminService {
                         }
 
                         // =====================
-                        // FINE TRANSACTION
+                        // ASSURANCE DEPOSIT
                         // =====================
 
-                        if (booking.getCollectedFineAmount() > 0) {
+                        if ("BOOKING".equalsIgnoreCase(booking.getType())
+                                        && booking.getAssuranceDeposit() > 0) {
 
                                 RevenueTransactionDto dto = new RevenueTransactionDto();
 
-                                dto.setBookingId(
-                                                booking.getBookingId());
+                                dto.setBookingId(booking.getBookingId());
 
-                                dto.setVehicleNumber(
-                                                booking.getVehicleNumber());
+                                dto.setVehicleNumber(booking.getVehicleNumber());
 
-                                dto.setDateTime(
-                                                booking.getFinePaymentTime());
+                                dto.setDateTime(booking.getPaymentTime());
 
-                                dto.setTransactionType(
-                                                "FINE");
+                                dto.setTransactionType("ASSURANCE_DEPOSIT");
 
                                 dto.setPaymentMode(
-                                                booking.getFinePaymentMode());
+                                                "PREPAID".equalsIgnoreCase(booking.getPaymentMode())
+                                                                ? "PREPAID (ONLINE)"
+                                                                : booking.getPaymentMode());
 
-                                dto.setAmount(
-                                                booking.getCollectedFineAmount());
+                                dto.setAmount(booking.getAssuranceDeposit());
 
-                                dto.setParkingId(
-                                                booking.getParkingId());
+                                dto.setParkingId(booking.getParkingId());
 
-                                dto.setParkingName(
-                                                booking.getParkingName());
+                                dto.setParkingName(booking.getParkingName());
 
                                 if (matchesFilter(dto, filter)) {
                                         result.add(dto);
@@ -288,36 +273,88 @@ public class AdminService {
                         }
 
                         // =====================
-                        // REFUND TRANSACTION
+                        // FINE
                         // =====================
 
-                        if (booking.getRefundAmount() > 0) {
+                        if (booking.isFinePaid()
+                                        && booking.getCollectedFineAmount() > 0) {
 
                                 RevenueTransactionDto dto = new RevenueTransactionDto();
 
-                                dto.setBookingId(
-                                                booking.getBookingId());
+                                dto.setBookingId(booking.getBookingId());
 
-                                dto.setVehicleNumber(
-                                                booking.getVehicleNumber());
+                                dto.setVehicleNumber(booking.getVehicleNumber());
 
-                                dto.setDateTime(
-                                                booking.getRefundTime());
+                                dto.setDateTime(booking.getFinePaymentTime());
 
-                                dto.setTransactionType(
-                                                "REFUND");
+                                dto.setTransactionType("FINE");
 
-                                dto.setPaymentMode(
-                                                booking.getPaymentMode());
+                                dto.setPaymentMode(booking.getFinePaymentMode());
 
-                                dto.setAmount(
-                                                booking.getRefundAmount());
+                                dto.setAmount(booking.getCollectedFineAmount());
 
-                                dto.setParkingId(
-                                                booking.getParkingId());
+                                dto.setParkingId(booking.getParkingId());
 
-                                dto.setParkingName(
-                                                booking.getParkingName());
+                                dto.setParkingName(booking.getParkingName());
+
+                                if (matchesFilter(dto, filter)) {
+                                        result.add(dto);
+                                }
+                        }
+
+                        // =====================
+                        // ASSURANCE DEPOSIT REFUND
+                        // =====================
+
+                        if (booking.getAssuranceDepositRefund() > 0) {
+
+                                RevenueTransactionDto dto = new RevenueTransactionDto();
+
+                                dto.setBookingId(booking.getBookingId());
+
+                                dto.setVehicleNumber(booking.getVehicleNumber());
+
+                                dto.setDateTime(booking.getDepositRefundTime());
+
+                                dto.setTransactionType("ASSURANCE_DEPOSIT_REFUND");
+
+                                dto.setPaymentMode(booking.getPaymentMode());
+
+                                dto.setAmount(-booking.getAssuranceDepositRefund());
+
+                                dto.setParkingId(booking.getParkingId());
+
+                                dto.setParkingName(booking.getParkingName());
+
+                                if (matchesFilter(dto, filter)) {
+                                        result.add(dto);
+                                }
+                        }
+
+                        // =====================
+                        // WALK-IN
+                        // =====================
+
+                        if ("WALKIN".equalsIgnoreCase(booking.getType())
+                                        && booking.getAmount() > 0) {
+
+                                RevenueTransactionDto dto = new RevenueTransactionDto();
+
+                                dto.setBookingId(booking.getBookingId());
+
+                                dto.setVehicleNumber(booking.getVehicleNumber());
+
+                                dto.setDateTime(booking.getExitTime());
+
+                                dto.setTransactionType("WALKIN");
+
+                                dto.setPaymentMode(booking.getPaymentMode());
+
+                                dto.setAmount(booking.getAmount());
+
+                                dto.setParkingId(booking.getParkingId());
+
+                                dto.setParkingName(booking.getParkingName());
 
                                 if (matchesFilter(dto, filter)) {
                                         result.add(dto);
@@ -331,128 +368,132 @@ public class AdminService {
                                 continue;
                         }
 
-                        if (!booking.getRefundTime()
-                                        .toLocalDate()
-                                        .equals(date)) {
+                        if (!booking.getRefundTime().toLocalDate().equals(date)) {
                                 continue;
                         }
 
-                        if (parkingId != null &&
-                                        !parkingId.isBlank() &&
-                                        !parkingId.equals(
-                                                        booking.getParkingId())) {
-
+                        if (parkingId != null
+                                        && !parkingId.isBlank()
+                                        && !parkingId.equals(booking.getParkingId())) {
                                 continue;
                         }
 
-                        if (booking.getRefundAmount() <= 0) {
-                                continue;
+                        // =====================
+                        // BOOKING FEE
+                        // =====================
+
+                        if (booking.getBookingFee() > 0
+                                        && "PAID".equalsIgnoreCase(booking.getPaymentStatus())) {
+
+                                RevenueTransactionDto dto = new RevenueTransactionDto();
+
+                                dto.setBookingId(booking.getBookingId());
+                                dto.setVehicleNumber(booking.getVehicleNumber());
+                                dto.setDateTime(booking.getPaymentTime());
+                                dto.setTransactionType("BOOKING_FEE");
+                                dto.setPaymentMode(booking.getPaymentMode());
+                                dto.setAmount(booking.getBookingFee());
+                                dto.setParkingId(booking.getParkingId());
+                                dto.setParkingName(booking.getParkingName());
+
+                                if (matchesFilter(dto, filter)) {
+                                        result.add(dto);
+                                }
                         }
 
-                        RevenueTransactionDto dto = new RevenueTransactionDto();
+                        // =====================
+                        // ASSURANCE DEPOSIT
+                        // =====================
 
-                        dto.setBookingId(
-                                        booking.getBookingId());
+                        if (booking.getAssuranceDeposit() > 0
+                                        && "PAID".equalsIgnoreCase(booking.getPaymentStatus())) {
 
-                        dto.setVehicleNumber(
-                                        booking.getVehicleNumber());
+                                RevenueTransactionDto dto = new RevenueTransactionDto();
 
-                        dto.setDateTime(
-                                        booking.getRefundTime());
+                                dto.setBookingId(booking.getBookingId());
+                                dto.setVehicleNumber(booking.getVehicleNumber());
+                                dto.setDateTime(booking.getPaymentTime());
+                                dto.setTransactionType("ASSURANCE_DEPOSIT");
+                                dto.setPaymentMode(booking.getPaymentMode());
+                                dto.setAmount(booking.getAssuranceDeposit());
+                                dto.setParkingId(booking.getParkingId());
+                                dto.setParkingName(booking.getParkingName());
 
-                        dto.setTransactionType(
-                                        "REFUND");
+                                if (matchesFilter(dto, filter)) {
+                                        result.add(dto);
+                                }
+                        }
 
-                        dto.setPaymentMode(
-                                        booking.getPaymentMode());
+                        // =====================
+                        // BOOKING FEE REFUND
+                        // =====================
 
-                        dto.setAmount(
-                                        booking.getRefundAmount());
+                        if (booking.getBookingFeeRefund() > 0) {
 
-                        dto.setParkingId(
-                                        booking.getParkingId());
+                                RevenueTransactionDto dto = new RevenueTransactionDto();
 
-                        dto.setParkingName(
-                                        booking.getParkingName());
+                                dto.setBookingId(booking.getBookingId());
+                                dto.setVehicleNumber(booking.getVehicleNumber());
+                                dto.setDateTime(booking.getRefundTime());
+                                dto.setTransactionType("BOOKING_FEE_REFUND");
+                                dto.setPaymentMode(booking.getPaymentMode());
+                                dto.setAmount(-booking.getBookingFeeRefund());
+                                dto.setParkingId(booking.getParkingId());
+                                dto.setParkingName(booking.getParkingName());
 
-                        if (matchesFilter(dto, filter)) {
-                                result.add(dto);
+                                if (matchesFilter(dto, filter)) {
+                                        result.add(dto);
+                                }
+                        }
+
+                        // =====================
+                        // ASSURANCE DEPOSIT REFUND
+                        // =====================
+
+                        if (booking.getAssuranceDepositRefund() > 0) {
+
+                                RevenueTransactionDto dto = new RevenueTransactionDto();
+
+                                dto.setBookingId(booking.getBookingId());
+                                dto.setVehicleNumber(booking.getVehicleNumber());
+                                dto.setDateTime(booking.getRefundTime());
+                                dto.setTransactionType("ASSURANCE_DEPOSIT_REFUND");
+                                dto.setPaymentMode(booking.getPaymentMode());
+                                dto.setAmount(-booking.getAssuranceDepositRefund());
+                                dto.setParkingId(booking.getParkingId());
+                                dto.setParkingName(booking.getParkingName());
+
+                                if (matchesFilter(dto, filter)) {
+                                        result.add(dto);
+                                }
                         }
                 }
 
-                for (Booking booking : cancelledBookings) {
-
-                        if (!"NO_SHOW".equals(booking.getRefundStatus())) {
-                                continue;
-                        }
-
-                        if (booking.getStartTime() == null) {
-                                continue;
-                        }
-
-                        if (!booking.getStartTime()
-                                        .toLocalDate()
-                                        .equals(date)) {
-                                continue;
-                        }
-
-                        if (parkingId != null &&
-                                        !parkingId.isBlank() &&
-                                        !parkingId.equals(booking.getParkingId())) {
-                                continue;
-                        }
-
-                        RevenueTransactionDto dto = new RevenueTransactionDto();
-
-                        dto.setBookingId(
-                                        booking.getBookingId());
-
-                        dto.setVehicleNumber(
-                                        booking.getVehicleNumber());
-
-                        dto.setDateTime(
-                                        booking.getStartTime());
-
-                        dto.setTransactionType(
-                                        "NO_SHOW");
-
-                        dto.setPaymentMode(
-                                        "ONLINE");
-
-                        dto.setAmount(
-                                        booking.getAmount());
-
-                        dto.setParkingId(
-                                        booking.getParkingId());
-
-                        dto.setParkingName(
-                                        booking.getParkingName());
-
-                        if (matchesFilter(dto, filter)) {
-                                result.add(dto);
-                        }
-                }
+                result.sort(
+                                Comparator.comparing(
+                                                RevenueTransactionDto::getDateTime,
+                                                Comparator.nullsLast(Comparator.reverseOrder())));
 
                 return result;
         }
 
-        public List<ParkingRevenueDto> getParkingRevenue( // Admin Website (dashboard m3 + Revenue m2)
-                        LocalDate date) {
+        public List<ParkingRevenueDto> getParkingRevenue(LocalDate date) {
 
-                List<Booking> bookings = bookingRepository.findByStatus("COMPLETED");
+                List<Booking> completedBookings = bookingRepository.findByStatus("COMPLETED");
                 List<Booking> cancelledBookings = bookingRepository.findByStatus("CANCELLED");
 
                 Map<String, ParkingRevenueDto> revenueMap = new HashMap<>();
 
-                for (Booking booking : bookings) {
+                // ===========================
+                // COMPLETED BOOKINGS
+                // ===========================
+                for (Booking booking : completedBookings) {
 
                         if (booking.getExitTime() == null) {
                                 continue;
                         }
 
-                        if (!booking.getExitTime()
-                                        .toLocalDate()
-                                        .equals(date)) {
+                        if (!booking.getExitTime().toLocalDate().equals(date)) {
                                 continue;
                         }
 
@@ -463,37 +504,42 @@ public class AdminService {
                                         new ParkingRevenueDto());
 
                         dto.setParkingId(parkingId);
+                        dto.setParkingName(booking.getParkingName());
 
-                        dto.setParkingName(
-                                        booking.getParkingName());
+                        double revenue = dto.getRevenue();
 
-                        double currentRevenue = dto.getRevenue();
+                        if ("BOOKING".equalsIgnoreCase(booking.getType())) {
 
-                        currentRevenue += booking.getAmount();
+                                revenue += booking.getBookingFee();
+                                revenue += booking.getAssuranceDeposit();
+                                revenue -= booking.getAssuranceDepositRefund();
+                        }
 
-                        currentRevenue += booking.getCollectedFineAmount();
+                        if ("WALKIN".equalsIgnoreCase(booking.getType())) {
 
-                        dto.setRevenue(currentRevenue);
+                                revenue += booking.getAmount();
+                        }
 
-                        revenueMap.put(
-                                        parkingId,
-                                        dto);
+                        if (booking.isFinePaid()) {
+
+                                revenue += booking.getCollectedFineAmount();
+                        }
+
+                        dto.setRevenue(revenue);
+
+                        revenueMap.put(parkingId, dto);
                 }
 
+                // ===========================
+                // CANCELLED BOOKINGS
+                // ===========================
                 for (Booking booking : cancelledBookings) {
 
-                        if (!"NO_SHOW".equals(
-                                        booking.getRefundStatus())) {
+                        if (booking.getRefundTime() == null) {
                                 continue;
                         }
 
-                        if (booking.getStartTime() == null) {
-                                continue;
-                        }
-
-                        if (!booking.getStartTime()
-                                        .toLocalDate()
-                                        .equals(date)) {
+                        if (!booking.getRefundTime().toLocalDate().equals(date)) {
                                 continue;
                         }
 
@@ -504,25 +550,26 @@ public class AdminService {
                                         new ParkingRevenueDto());
 
                         dto.setParkingId(parkingId);
+                        dto.setParkingName(booking.getParkingName());
 
-                        dto.setParkingName(
-                                        booking.getParkingName());
+                        double revenue = dto.getRevenue();
 
-                        dto.setRevenue(
-                                        dto.getRevenue()
-                                                        + booking.getAmount());
+                        revenue += booking.getBookingFee();
+                        revenue += booking.getAssuranceDeposit();
 
-                        revenueMap.put(
-                                        parkingId,
-                                        dto);
+                        revenue -= booking.getBookingFeeRefund();
+                        revenue -= booking.getAssuranceDepositRefund();
+
+                        dto.setRevenue(revenue);
+
+                        revenueMap.put(parkingId, dto);
                 }
 
                 List<ParkingRevenueDto> result = new ArrayList<>(revenueMap.values());
 
-                result.sort(
-                                (a, b) -> Double.compare(
-                                                b.getRevenue(),
-                                                a.getRevenue()));
+                result.sort((a, b) -> Double.compare(
+                                b.getRevenue(),
+                                a.getRevenue()));
 
                 return result;
         }

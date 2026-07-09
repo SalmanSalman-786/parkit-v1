@@ -1,0 +1,32 @@
+package com.parking.backend.model;
+
+public enum NotificationType {
+
+    BOOKING_CONFIRMED,
+
+    BOOKING_REMINDER,
+
+    BOOKING_WARNING,
+
+    BOOKING_STARTED,
+
+    PARKING_EXPIRY,
+
+    PARKING_TIME_OVER,
+
+    FINE_UPDATED,
+
+    FINE_PAID,
+
+    BOOKING_CANCELLED,
+
+    AUTO_CANCELLED,
+
+    REFUND_PROCESSED,
+
+    ENTRY_SUCCESS,
+
+    EXIT_SUCCESS,
+
+    ANNOUNCEMENT
+}

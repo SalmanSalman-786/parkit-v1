@@ -10,6 +10,9 @@ import com.parking.backend.repository.BookingRepository;
 import com.parking.backend.repository.UserRepository;
 import com.parking.backend.service.AdminService;
 import com.parking.backend.service.BookingService;
+
+import jakarta.validation.Valid;
+
 import com.parking.backend.repository.ParkingRepository;
 
 import org.springframework.web.bind.annotation.*;
@@ -23,7 +26,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/admin")
-@CrossOrigin("*")
+//@CrossOrigin("*")
 public class AdminController {
 
         private final UserRepository userRepository;
@@ -45,8 +48,8 @@ public class AdminController {
                 this.adminService = adminService;
         }
 
-        @GetMapping("/dashboard") 
-        public Map<String, Object> getDashboard() {        // Admin Website (dashboard m1)
+        @GetMapping("/dashboard")
+        public Map<String, Object> getDashboard() { // Admin Website (dashboard m1)
 
                 Map<String, Object> result = new HashMap<>();
 
@@ -70,21 +73,18 @@ public class AdminController {
 
                 RevenueSummaryResponse revenue = adminService.getRevenueSummary(today);
 
-                double todayRevenue = Math.max(
-                                0,
-                                revenue.getTotalRevenue()
-                                                - revenue.getRefundAmount());
+                
 
                 result.put("totalUsers", totalUsers);
                 result.put("totalGuards", totalGuards);
                 result.put("totalParkings", totalParkings);
                 result.put("activeBookings", activeBookings);
                 result.put("activeWalkins", activeWalkins);
-                result.put("todayRevenue", todayRevenue);
+                result.put("todayRevenue", revenue.getNetRevenue());
                 return result;
         }
 
-        @GetMapping("/users")      // Admin Website (Users m1)
+        @GetMapping("/users") // Admin Website (Users m1)
         public List<Map<String, Object>> getUsers() {
 
                 List<User> users = userRepository.findByRole("USER");
@@ -121,7 +121,7 @@ public class AdminController {
                 return result;
         }
 
-        @GetMapping("/users/{userId}")   // Admin Website (UserDetails m1)
+        @GetMapping("/users/{userId}") // Admin Website (UserDetails m1)
         public Map<String, Object> getUserDetails(
                         @PathVariable String userId) {
 
@@ -143,7 +143,7 @@ public class AdminController {
                 return result;
         }
 
-        @GetMapping("/guards")    // Admin Website (Guards m2)
+        @GetMapping("/guards") // Admin Website (Guards m2)
         public List<Map<String, Object>> getGuards() {
 
                 List<User> guards = userRepository.findByRole("GUARD");
@@ -173,10 +173,10 @@ public class AdminController {
                 return result;
         }
 
-        @PutMapping("/guards/{id}")        // Admin Guard (Guards m4)
+        @PutMapping("/guards/{id}") // Admin Guard (Guards m4)
         public String updateGuard(
                         @PathVariable String id,
-                        @RequestBody User request) {
+                        @Valid @RequestBody User request) {
 
                 User guard = userRepository.findById(id)
                                 .orElseThrow(() -> new RuntimeException("Guard not found"));
@@ -194,9 +194,8 @@ public class AdminController {
 
                 return "Guard updated";
         }
-        
 
-        @GetMapping("/walkins")   // Admin Website (Walkins m1)
+        @GetMapping("/walkins") // Admin Website (Walkins m1)
         public List<Map<String, Object>> getWalkins() {
 
                 List<Booking> bookings = bookingRepository.findAll();
@@ -240,7 +239,7 @@ public class AdminController {
                 return new ArrayList<>(grouped.values());
         }
 
-        @GetMapping("/walkins/{vehicleNumber}")  // Admin Website (WalkinDetails m1)
+        @GetMapping("/walkins/{vehicleNumber}") // Admin Website (WalkinDetails m1)
         public Map<String, Object> getWalkinDetails(
                         @PathVariable String vehicleNumber) {
 
@@ -276,7 +275,7 @@ public class AdminController {
                 return bookingRepository.findAll();
         }
 
-        @GetMapping("/bookings/{bookingId}")      // Admin Website (Booking details m1 + Bookings m1)
+        @GetMapping("/bookings/{bookingId}") // Admin Website (Booking details m1 + Bookings m1)
         public Map<String, Object> getBookingDetails(
                         @PathVariable String bookingId) {
 
@@ -284,7 +283,7 @@ public class AdminController {
         }
 
         @GetMapping("/revenue")
-        public RevenueSummaryResponse getRevenue(   // Admin Website (Revenue m1)
+        public RevenueSummaryResponse getRevenue( // Admin Website (Revenue m1)
                         @RequestParam(required = false) String date) {
 
                 LocalDate selectedDate = (date == null || date.isBlank())
@@ -294,7 +293,7 @@ public class AdminController {
                 return adminService.getRevenueSummary(selectedDate);
         }
 
-        @GetMapping("/revenue/transactions")   // Admin website (Revenue transactions m1)
+        @GetMapping("/revenue/transactions") // Admin website (Revenue transactions m1)
         public List<RevenueTransactionDto> getRevenueTransactions(
 
                         @RequestParam(required = false) String date,
@@ -314,7 +313,7 @@ public class AdminController {
                                                 parkingId);
         }
 
-        @GetMapping("/revenue/parking")     // Admin Website (dashboard m3 + Revenue m2)
+        @GetMapping("/revenue/parking") // Admin Website (dashboard m3 + Revenue m2)
         public List<ParkingRevenueDto> getParkingRevenue(
                         @RequestParam(required = false) String date) {
 
@@ -327,7 +326,7 @@ public class AdminController {
         }
 
         @GetMapping("/revenue/last7days")
-        public List<Map<String, Object>> getLast7DaysRevenue() {    // Admin Website (dashboard m2)
+        public List<Map<String, Object>> getLast7DaysRevenue() { // Admin Website (dashboard m2)
 
                 return adminService.getLast7DaysRevenue();
         }

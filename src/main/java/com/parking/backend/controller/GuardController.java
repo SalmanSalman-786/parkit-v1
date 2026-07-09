@@ -11,7 +11,7 @@ import com.parking.backend.service.GuardService;
 
 @RestController
 @RequestMapping("/api/guard")
-@CrossOrigin("*")
+//@CrossOrigin("*")
 public class GuardController {
 
         private final GuardService guardService;

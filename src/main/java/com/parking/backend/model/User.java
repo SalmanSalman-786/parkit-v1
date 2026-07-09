@@ -61,6 +61,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.time.LocalDateTime;
 
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
+
 @Data
 @Entity
 @Table(name = "users")
@@ -71,6 +75,7 @@ public class User {
     private String id;
 
     @Column(unique = true)
+    @Pattern(regexp = "^[0-9]{10}$", message = "Invalid phone number")
     private String phoneNumber;
 
     private String role;
@@ -78,9 +83,14 @@ public class User {
     @ElementCollection(fetch = FetchType.EAGER)
     private List<Vehicle> vehicles = new ArrayList<>();
 
+    @NotBlank(message = "Name is required")
+    @Size(max = 100, message = "Name cannot exceed 100 characters")
     private String name;
 
+    @Size(min = 3, max = 50, message = "Username must be 3-50 characters")
     private String username;
+
+    @Size(min = 6, message = "Password must be at least 6 characters")
     private String password;
 
     private Integer failedLoginAttempts = 0;

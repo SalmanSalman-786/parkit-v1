@@ -1,9 +1,13 @@
 package com.parking.backend.service;
 
 import com.parking.backend.model.Booking;
+import com.parking.backend.model.Parking;
 import com.parking.backend.repository.BookingRepository;
+import com.parking.backend.repository.ParkingRepository;
 import com.razorpay.Order;
 import com.razorpay.RazorpayClient;
+
+import java.time.Duration;
 import java.time.LocalDateTime;
 import org.springframework.beans.factory.annotation.Value;
 import org.json.JSONObject;
@@ -11,10 +15,17 @@ import org.springframework.stereotype.Service;
 import com.razorpay.Utils;
 import com.razorpay.Refund;
 
+import com.parking.backend.dto.PaymentStatus;
+import com.razorpay.Payment;
+import java.util.List;
+
+import com.razorpay.PaymentLink;
+
 @Service
 public class PaymentService {
 
         private final BookingRepository bookingRepository;
+        private final ParkingRepository parkingRepository;
 
         // 🔥 TEST KEYS
         @Value("${razorpay.key.id}")
@@ -23,8 +34,56 @@ public class PaymentService {
         @Value("${razorpay.key.secret}")
         private String keySecret;
 
-        PaymentService(BookingRepository bookingRepository) {
+        PaymentService(
+                        BookingRepository bookingRepository,
+                        ParkingRepository parkingRepository) {
+
                 this.bookingRepository = bookingRepository;
+                this.parkingRepository = parkingRepository;
+        }
+
+        public String createOrder(String bookingId) { // User App (booking screen m8)
+
+                try {
+
+                        Booking booking = bookingRepository
+                                        .findByBookingId(bookingId)
+                                        .orElseThrow(() -> new RuntimeException("Booking not found"));
+
+                        RazorpayClient client = new RazorpayClient(keyId, keySecret);
+
+                        JSONObject options = new JSONObject();
+
+                        // Razorpay uses paise
+                        options.put("amount", (int) Math.round(booking.getAmount() * 100));
+
+                        options.put("currency", "INR");
+
+                        // Use bookingId as receipt for easy tracking
+                        options.put("receipt", booking.getBookingId());
+
+                        JSONObject notes = new JSONObject();
+
+                        notes.put("bookingId", booking.getBookingId());
+
+                        notes.put("parkingId", booking.getParkingId());
+
+                        notes.put("userId", booking.getUserId());
+
+                        options.put("notes", notes);
+
+                        Order order = client.orders.create(options);
+
+                        // Save Razorpay Order ID BEFORE payment
+                        booking.setRazorpayOrderId(order.get("id"));
+
+                        bookingRepository.save(booking);
+
+                        return order.toString();
+
+                } catch (Exception e) {
+                        throw new RuntimeException("Failed to create payment order");
+                }
         }
 
         public String createOrder(double amount) { // User App (booking screen m8) + Guard App (operations screen m6)
@@ -162,34 +221,183 @@ public class PaymentService {
                                                                 "Booking not found"));
 
                 // Store payment info
-                booking.setPaymentStatus("PAID");
-
-                booking.setRazorpayPaymentId(
+                completeExitPayment(
+                                booking,
                                 paymentId);
 
-                booking.setPaymentTime(
-                                LocalDateTime.now());
+                return true;
+        }
 
-                // Fine tracking only if fine exists
+        public void completeExitPayment(
+                        Booking booking,
+                        String paymentId) {
+
+                booking.setPaymentStatus("PAID");
+
+                booking.setPaymentMode("ONLINE");
+
+                booking.setRazorpayPaymentId(paymentId);
+
+                booking.setPaymentTime(LocalDateTime.now());
+
                 if (booking.getFineAmount() > 0) {
 
                         booking.setFinePaid(true);
 
                         booking.setFinePaymentMode("ONLINE");
 
-                        booking.setFinePaymentId(
-                                        paymentId);
+                        booking.setFinePaymentId(paymentId);
 
-                        booking.setFinePaymentTime(
-                                        LocalDateTime.now());
+                        booking.setFinePaymentTime(LocalDateTime.now());
 
                         booking.setCollectedFineAmount(
                                         booking.getFineAmount());
                 }
-                booking.setPaymentMode("ONLINE");
 
                 bookingRepository.save(booking);
-
-                return true;
         }
+
+        public PaymentStatus checkPayment(String orderId) {
+
+                try {
+
+                        RazorpayClient client = new RazorpayClient(keyId, keySecret);
+
+                        List<Payment> payments = client.orders.fetchPayments(orderId);
+
+                        for (Payment payment : payments) {
+
+                                String status = payment.get("status");
+
+                                if ("captured".equalsIgnoreCase(status)) {
+
+                                        return new PaymentStatus(
+                                                        true,
+                                                        payment.get("id"));
+                                }
+                        }
+
+                        return new PaymentStatus(false, null);
+
+                } catch (Exception e) {
+
+                        throw new RuntimeException(
+                                        "Unable to verify payment with Razorpay",
+                                        e);
+                }
+        }
+
+        public String createExitPaymentLink(String bookingId) {
+
+                try {
+
+                        Booking booking = bookingRepository
+                                        .findByBookingId(bookingId)
+                                        .orElseThrow(() -> new RuntimeException("Booking not found"));
+
+                        // Reuse existing active payment link
+                        if (booking.getPaymentLinkId() != null
+                                        && "CREATED".equals(booking.getPaymentLinkStatus())
+                                        && booking.getPaymentLinkUrl() != null) {
+
+                                JSONObject response = new JSONObject();
+
+                                response.put("id", booking.getPaymentLinkId());
+                                response.put("short_url", booking.getPaymentLinkUrl());
+                                response.put("status", "created");
+
+                                return response.toString();
+                        }
+
+                        double amount = 0;
+
+                        double fine = booking.getFineAmount();
+
+                        if ("WALKIN".equalsIgnoreCase(booking.getType())) {
+
+                                long minutes = Duration
+                                                .between(
+                                                                booking.getEntryTime(),
+                                                                LocalDateTime.now())
+                                                .toMinutes();
+
+                                Parking parking = parkingRepository
+                                                .findById(booking.getParkingId())
+                                                .orElseThrow();
+
+                                double rate = "TWO_WHEELER".equals(booking.getVehicleType())
+                                                ? parking.getBikeHourlyRate()
+                                                : parking.getCarHourlyRate();
+
+                                amount = Math.ceil(minutes / 60.0) * rate;
+                        }
+
+                        double total;
+
+                        if ("WALKIN".equalsIgnoreCase(booking.getType())) {
+
+                                total = amount + fine;
+
+                        } else {
+
+                                total = fine;
+                        }
+
+                        if (total <= 0) {
+                                throw new RuntimeException("Invalid amount");
+                        }
+
+                        RazorpayClient client = new RazorpayClient(keyId, keySecret);
+
+                        JSONObject request = new JSONObject();
+
+                        request.put("amount", (int) (total * 100));
+
+                        request.put("currency", "INR");
+
+                        request.put("accept_partial", false);
+
+                        request.put("description", "Parking Exit Payment");
+
+                        String reference = "EX" + System.currentTimeMillis();
+
+                        request.put("reference_id", reference);
+
+                        request.put("notify", new JSONObject()
+                                        .put("sms", false)
+                                        .put("email", false));
+
+                        request.put("reminder_enable", false);
+
+                        PaymentLink paymentLink = client.paymentLink.create(request);
+
+                        System.out.println("====================================");
+                        System.out.println("PAYMENT LINK CREATED");
+                        System.out.println(paymentLink.toString());
+                        System.out.println("====================================");
+
+                        booking.setPaymentLinkId(
+                                        paymentLink.get("id"));
+                        booking.setPaymentLinkUrl(
+                                        paymentLink.get("short_url"));
+
+                        booking.setPaymentLinkStatus("CREATED");
+                        booking.setPaymentLinkReference(reference);
+                        System.out.println("Payment Link ID : " + paymentLink.get("id"));
+                        System.out.println("Short URL       : " + paymentLink.get("short_url"));
+
+                        bookingRepository.save(booking);
+
+                        return paymentLink.toString();
+
+                } catch (Exception e) {
+
+                        e.printStackTrace();
+
+                        throw new RuntimeException(
+                                        "Failed to create payment link: " + e.getMessage(),
+                                        e);
+                }
+        }
+
 }
