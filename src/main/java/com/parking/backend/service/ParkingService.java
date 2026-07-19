@@ -36,18 +36,22 @@ public class ParkingService {
 
         private final AuditLogService auditLogService;
 
+        private final CloudinaryService cloudinaryService;
+
         ParkingService(
                         ParkingRepository parkingRepository,
                         BookingRepository bookingRepository,
                         UserRepository userRepository,
                         ParkingTariffRepository parkingTariffRepository,
-                        AuditLogService auditLogService) {
+                        AuditLogService auditLogService,
+                        CloudinaryService cloudinaryService) {
 
                 this.parkingRepository = parkingRepository;
                 this.bookingRepository = bookingRepository;
                 this.userRepository = userRepository;
                 this.parkingTariffRepository = parkingTariffRepository;
                 this.auditLogService = auditLogService;
+                this.cloudinaryService = cloudinaryService;
         }
 
         public Parking addParking(
@@ -340,30 +344,7 @@ public class ParkingService {
                                                 "Image size must be below 5 MB");
                         }
 
-                        String uploadDir = "uploads/";
-
-                        File directory = new File(uploadDir);
-
-                        if (!directory.exists() && !directory.mkdirs()) {
-                                throw new RuntimeException("Unable to create upload directory");
-                        }
-
-                        String originalName = Paths.get(file.getOriginalFilename())
-                                        .getFileName()
-                                        .toString();
-
-                        String fileName = System.currentTimeMillis()
-                                        + "_"
-                                        + originalName.replaceAll("\\s+", "_");
-
-                        Path path = Paths.get(uploadDir + fileName);
-
-                        Files.copy(
-                                        file.getInputStream(),
-                                        path,
-                                        StandardCopyOption.REPLACE_EXISTING);
-
-                        return "/uploads/" + fileName;
+                        return cloudinaryService.uploadImage(file);
 
                 } catch (Exception e) {
 
@@ -381,17 +362,15 @@ public class ParkingService {
 
                 try {
 
-                        String relativePath = imageUrl.startsWith("/")
-                                        ? imageUrl.substring(1)
-                                        : imageUrl;
+                        String publicId = imageUrl
+                                        .substring(imageUrl.indexOf("/parkit/") + 1)
+                                        .replaceFirst("\\.[^.]+$", "");
 
-                        Path path = Paths.get(relativePath);
-
-                        Files.deleteIfExists(path);
+                        cloudinaryService.deleteImage(publicId);
 
                 } catch (Exception e) {
 
-                        System.err.println("Failed to delete image: " + imageUrl);
+                        System.err.println("Failed to delete Cloudinary image: " + imageUrl);
                 }
         }
 
