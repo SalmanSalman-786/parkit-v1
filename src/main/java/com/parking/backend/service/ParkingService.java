@@ -193,8 +193,13 @@ public class ParkingService {
                 parking.setLatitude(updated.getLatitude());
                 parking.setLongitude(updated.getLongitude());
 
-                parking.setImageUrl(
-                                updated.getImageUrl());
+                String oldImage = parking.getImageUrl();
+
+                if (updated.getImageUrl() != null
+                                && !updated.getImageUrl().equals(oldImage)) {
+
+                        parking.setImageUrl(updated.getImageUrl());
+                }
 
                 parking.setTwoWheelerCapacity(updated.getTwoWheelerCapacity());
                 parking.setTwoWheelerAvailable(updated.getTwoWheelerAvailable());
@@ -244,6 +249,12 @@ public class ParkingService {
                                 updated.getBookingWindowEnd());
 
                 Parking saved = parkingRepository.save(parking);
+
+                if (updated.getImageUrl() != null
+                                && !updated.getImageUrl().equals(oldImage)) {
+
+                        deleteImage(oldImage);
+                }
                 User admin = userRepository.findById(adminId)
                                 .orElse(null);
 
@@ -286,7 +297,10 @@ public class ParkingService {
                 // Delete all tariffs belonging to this parking
                 parkingTariffRepository.deleteByParkingId(id);
 
-                // Delete the parking
+                // Delete image
+                deleteImage(parking.getImageUrl());
+
+                // Delete parking
                 parkingRepository.delete(parking);
 
                 User admin = userRepository.findById(adminId)
@@ -356,6 +370,28 @@ public class ParkingService {
                         throw new RuntimeException(
                                         "Image upload failed",
                                         e);
+                }
+        }
+
+        private void deleteImage(String imageUrl) {
+
+                if (imageUrl == null || imageUrl.isBlank()) {
+                        return;
+                }
+
+                try {
+
+                        String relativePath = imageUrl.startsWith("/")
+                                        ? imageUrl.substring(1)
+                                        : imageUrl;
+
+                        Path path = Paths.get(relativePath);
+
+                        Files.deleteIfExists(path);
+
+                } catch (Exception e) {
+
+                        System.err.println("Failed to delete image: " + imageUrl);
                 }
         }
 
