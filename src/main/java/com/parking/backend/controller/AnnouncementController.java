@@ -1,14 +1,16 @@
 package com.parking.backend.controller;
 
 import java.util.List;
-import java.util.Map;
+
 
 import org.springframework.web.bind.annotation.*;
 
+import com.parking.backend.dto.AnnouncementRequest;
 import com.parking.backend.dto.AnnouncementResponse;
 import com.parking.backend.model.Announcement;
 import com.parking.backend.service.AnnouncementService;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
 @RestController
@@ -27,11 +29,11 @@ public class AnnouncementController {
     // ADMIN DASHBOARD
     @PostMapping("/api/admin/announcements")
     public Announcement createAnnouncement(
-            @RequestBody Map<String, String> request) {
+            @Valid @RequestBody AnnouncementRequest request) {
 
         return announcementService.createAnnouncement(
-                request.get("title"),
-                request.get("message"));
+                request.getTitle(),
+                request.getMessage());
     }
 
     @DeleteMapping("/api/admin/announcements/{id}")
@@ -53,10 +55,10 @@ public class AnnouncementController {
     }
 
     @GetMapping("/api/admin/announcements")
-public List<AnnouncementResponse> getAllAnnouncements() {
+    public List<AnnouncementResponse> getAllAnnouncements() {
 
-    return announcementService.getAllAnnouncements();
-}
+        return announcementService.getAllAnnouncements();
+    }
 
     @PutMapping("/api/admin/announcements/{id}/enable")
     public String enableAnnouncement(

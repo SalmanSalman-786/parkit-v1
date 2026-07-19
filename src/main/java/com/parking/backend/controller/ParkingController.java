@@ -9,10 +9,12 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.multipart.MultipartFile;
 import jakarta.validation.Valid;
 
+import jakarta.servlet.http.HttpServletRequest;
+
 import java.util.List;
 
 @RestController
-//@CrossOrigin("*") // 🔥 ADD THIS LINE
+// @CrossOrigin("*") // 🔥 ADD THIS LINE
 @RequestMapping("/api/parking")
 public class ParkingController {
 
@@ -25,14 +27,18 @@ public class ParkingController {
     @PostMapping
     public Parking createParking(
             @Valid @RequestBody Parking parking,
-            Authentication auth) { // Admin Website (Add parking m1)
+            Authentication auth,
+            HttpServletRequest request) {
 
         if (!auth.getAuthorities().stream()
                 .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"))) {
             throw new RuntimeException("Unauthorized");
         }
 
-        return parkingService.addParking(parking);
+        return parkingService.addParking(
+                parking,
+                auth.getName(),
+                getClientIp(request));
     }
 
     @GetMapping
@@ -60,31 +66,40 @@ public class ParkingController {
         return parkingService.getParkingById(id);
     }
 
-    @PutMapping("/{id}") // Admin Website (Editparking m2)
+    @PutMapping("/{id}")
     public Parking updateParking(
             @PathVariable String id,
             @Valid @RequestBody Parking parking,
-            Authentication auth) {
+            Authentication auth,
+            HttpServletRequest request) {
 
         if (!auth.getAuthorities().stream()
                 .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"))) {
             throw new RuntimeException("Unauthorized");
         }
 
-        return parkingService.updateParking(id, parking);
+        return parkingService.updateParking(
+                id,
+                parking,
+                auth.getName(),
+                getClientIp(request));
     }
 
-    @DeleteMapping("/{id}") // Admin Website (parking details m3)
+    @DeleteMapping("/{id}")
     public String deleteParking(
             @PathVariable String id,
-            Authentication auth) {
+            Authentication auth,
+            HttpServletRequest request) {
 
         if (!auth.getAuthorities().stream()
                 .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"))) {
             throw new RuntimeException("Unauthorized");
         }
 
-        parkingService.deleteParking(id);
+        parkingService.deleteParking(
+                id,
+                auth.getName(),
+                getClientIp(request));
 
         return "Parking deleted successfully";
     }
@@ -100,5 +115,16 @@ public class ParkingController {
         }
 
         return parkingService.uploadImage(file);
+    }
+
+    private String getClientIp(HttpServletRequest request) {
+
+        String forwarded = request.getHeader("X-Forwarded-For");
+
+        if (forwarded != null && !forwarded.isBlank()) {
+            return forwarded.split(",")[0].trim();
+        }
+
+        return request.getRemoteAddr();
     }
 }

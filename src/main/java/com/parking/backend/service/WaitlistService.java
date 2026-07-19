@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.parking.backend.model.Parking;
 import com.parking.backend.model.User;
@@ -18,240 +19,245 @@ import org.springframework.scheduling.annotation.Scheduled;
 @Service
 public class WaitlistService {
 
-    private final WaitlistRepository waitlistRepository;
-    private final UserRepository userRepository;
-    private final ParkingRepository parkingRepository;
-    private final FirebaseNotificationService firebaseNotificationService;
+        private final WaitlistRepository waitlistRepository;
+        private final UserRepository userRepository;
+        private final ParkingRepository parkingRepository;
+        private final FirebaseNotificationService firebaseNotificationService;
 
-    public WaitlistService(
-            WaitlistRepository waitlistRepository,
-            UserRepository userRepository,
-            FirebaseNotificationService firebaseNotificationService,
-            ParkingRepository parkingRepository) {
+        public WaitlistService(
+                        WaitlistRepository waitlistRepository,
+                        UserRepository userRepository,
+                        FirebaseNotificationService firebaseNotificationService,
+                        ParkingRepository parkingRepository) {
 
-        this.waitlistRepository = waitlistRepository;
-        this.userRepository = userRepository;
-        this.firebaseNotificationService = firebaseNotificationService;
-        this.parkingRepository = parkingRepository;
-    }
-
-    public WaitlistRequest joinWaitlist(
-            WaitlistRequest request) {
-
-        boolean exists = waitlistRepository
-                .existsByUserIdAndParkingIdAndVehicleTypeAndBookingDate(
-                        request.getUserId(),
-                        request.getParkingId(),
-                        request.getVehicleType(),
-                        request.getBookingDate());
-
-        if (exists) {
-            throw new RuntimeException(
-                    "Already in waitlist");
+                this.waitlistRepository = waitlistRepository;
+                this.userRepository = userRepository;
+                this.firebaseNotificationService = firebaseNotificationService;
+                this.parkingRepository = parkingRepository;
         }
 
-        List<WaitlistRequest> queue = waitlistRepository
-                .findByParkingIdAndVehicleTypeAndBookingDateOrderByQueuePositionAsc(
-                        request.getParkingId(),
-                        request.getVehicleType(),
-                        request.getBookingDate());
+        @Transactional
+        public WaitlistRequest joinWaitlist(
+                        WaitlistRequest request) {
 
-        request.setQueuePosition(
-                queue.size() + 1);
+                boolean exists = waitlistRepository
+                                .existsByUserIdAndParkingIdAndVehicleTypeAndBookingDate(
+                                                request.getUserId(),
+                                                request.getParkingId(),
+                                                request.getVehicleType(),
+                                                request.getBookingDate());
 
-        request.setCreatedAt(
-                LocalDateTime.now());
+                if (exists) {
+                        throw new RuntimeException(
+                                        "Already in waitlist");
+                }
 
-        request.setNotified(false);
+                List<WaitlistRequest> queue = waitlistRepository
+                                .findByParkingIdAndVehicleTypeAndBookingDateOrderByQueuePositionAsc(
+                                                request.getParkingId(),
+                                                request.getVehicleType(),
+                                                request.getBookingDate());
 
-        request.setMissedNotifications(0);
+                request.setQueuePosition(
+                                queue.size() + 1);
 
-        return waitlistRepository.save(request);
-    }
+                request.setCreatedAt(
+                                LocalDateTime.now());
 
-    public WaitlistRequest getNextUser(
-            String parkingId,
-            String vehicleType,
-            LocalDate bookingDate) {
+                request.setNotified(false);
 
-        List<WaitlistRequest> queue = waitlistRepository
-                .findByParkingIdAndVehicleTypeAndBookingDateAndNotifiedFalseOrderByQueuePositionAsc(
-                        parkingId,
-                        vehicleType,
-                        bookingDate);
+                request.setMissedNotifications(0);
 
-        if (queue.isEmpty()) {
-            return null;
+                return waitlistRepository.save(request);
         }
 
-        return queue.get(0);
-    }
+        public WaitlistRequest getNextUser(
+                        String parkingId,
+                        String vehicleType,
+                        LocalDate bookingDate) {
 
-    public void notifyNextUser(
-            String parkingId,
-            String vehicleType,
-            LocalDate bookingDate) {
+                List<WaitlistRequest> queue = waitlistRepository
+                                .findByParkingIdAndVehicleTypeAndBookingDateAndNotifiedFalseOrderByQueuePositionAsc(
+                                                parkingId,
+                                                vehicleType,
+                                                bookingDate);
 
-        List<WaitlistRequest> activeReservations = waitlistRepository.findByNotifiedTrue();
+                if (queue.isEmpty()) {
+                        return null;
+                }
 
-        boolean alreadyReserved = activeReservations.stream()
-                .anyMatch(w -> parkingId.equals(w.getParkingId()) &&
-                        vehicleType.equals(w.getVehicleType()) &&
-                        bookingDate.equals(w.getBookingDate()));
-
-        if (alreadyReserved) {
-            return;
+                return queue.get(0);
         }
 
-        WaitlistRequest next = getNextUser(
-                parkingId,
-                vehicleType,
-                bookingDate);
+        @Transactional
+        public void notifyNextUser(
+                        String parkingId,
+                        String vehicleType,
+                        LocalDate bookingDate) {
 
-        if (next == null) {
-            return;
+                List<WaitlistRequest> activeReservations = waitlistRepository.findByNotifiedTrue();
+
+                boolean alreadyReserved = activeReservations.stream()
+                                .anyMatch(w -> parkingId.equals(w.getParkingId()) &&
+                                                vehicleType.equals(w.getVehicleType()) &&
+                                                bookingDate.equals(w.getBookingDate()));
+
+                if (alreadyReserved) {
+                        return;
+                }
+
+                WaitlistRequest next = getNextUser(
+                                parkingId,
+                                vehicleType,
+                                bookingDate);
+
+                if (next == null) {
+                        return;
+                }
+
+                User user = userRepository
+                                .findById(next.getUserId())
+                                .orElse(null);
+
+                if (user == null ||
+                                user.getFcmToken() == null ||
+                                user.getFcmToken().isBlank()) {
+                        return;
+                }
+
+                firebaseNotificationService.sendNotification(
+                                user.getFcmToken(),
+                                "🚗 Slot Available",
+                                "A slot is now available. You have "
+                                                + parkingRepository
+                                                                .findById(parkingId)
+                                                                .map(Parking::getWaitlistReservationMinutes)
+                                                                .orElse(15)
+                                                + " minutes to book.");
+
+                next.setNotified(true);
+                next.setNotificationTime(LocalDateTime.now());
+
+                waitlistRepository.save(next);
         }
 
-        User user = userRepository
-                .findById(next.getUserId())
-                .orElse(null);
+        @Transactional
+        public void removeFromWaitlist(
+                        String userId,
+                        String parkingId,
+                        String vehicleType,
+                        LocalDate bookingDate) {
 
-        if (user == null ||
-                user.getFcmToken() == null ||
-                user.getFcmToken().isBlank()) {
-            return;
+                waitlistRepository
+                                .deleteByUserIdAndParkingIdAndVehicleTypeAndBookingDate(
+                                                userId,
+                                                parkingId,
+                                                vehicleType,
+                                                bookingDate);
         }
 
-        firebaseNotificationService.sendNotification(
-                user.getFcmToken(),
-                "🚗 Slot Available",
-                "A slot is now available. You have "
-                        + parkingRepository
-                                .findById(parkingId)
-                                .map(Parking::getWaitlistReservationMinutes)
-                                .orElse(15)
-                        + " minutes to book.");
+        @Transactional
+        @Scheduled(fixedRate = 60000)
+        public void processExpiredNotifications() {
 
-        next.setNotified(true);
-        next.setNotificationTime(LocalDateTime.now());
+                List<WaitlistRequest> notifiedUsers = waitlistRepository.findByNotifiedTrue();
 
-        waitlistRepository.save(next);
-    }
+                LocalDateTime now = LocalDateTime.now();
+                for (WaitlistRequest request : notifiedUsers) {
 
-    public void removeFromWaitlist(
-            String userId,
-            String parkingId,
-            String vehicleType,
-            LocalDate bookingDate) {
+                        Parking parking = parkingRepository
+                                        .findById(request.getParkingId())
+                                        .orElse(null);
 
-        waitlistRepository
-                .deleteByUserIdAndParkingIdAndVehicleTypeAndBookingDate(
-                        userId,
-                        parkingId,
-                        vehicleType,
-                        bookingDate);
-    }
+                        if (parking == null) {
+                                continue;
+                        }
 
-    @Scheduled(fixedRate = 60000)
-    public void processExpiredNotifications() {
+                        if (request.getNotificationTime() == null) {
+                                continue;
+                        }
 
-        List<WaitlistRequest> notifiedUsers = waitlistRepository.findByNotifiedTrue();
+                        int minutes = parking.getWaitlistReservationMinutes();
 
-        for (WaitlistRequest request : notifiedUsers) {
+                        if (request.getNotificationTime()
+                                        .plusMinutes(minutes)
+                                        .isAfter(now)) {
 
-            Parking parking = parkingRepository
-                    .findById(request.getParkingId())
-                    .orElse(null);
+                                continue;
+                        }
 
-            if (parking == null) {
-                continue;
-            }
+                        request.setMissedNotifications(
+                                        request.getMissedNotifications() + 1);
 
-            if (request.getNotificationTime() == null) {
-                continue;
-            }
+                        // Remove after 3 misses
+                        if (request.getMissedNotifications() >= 3) {
 
-            int minutes = parking.getWaitlistReservationMinutes();
+                                waitlistRepository.delete(request);
 
-            if (request.getNotificationTime()
-                    .plusMinutes(minutes)
-                    .isAfter(LocalDateTime.now())) {
+                                reorderQueue(
+                                                request.getParkingId(),
+                                                request.getVehicleType(),
+                                                request.getBookingDate());
 
-                continue;
-            }
+                                continue;
+                        }
 
-            request.setMissedNotifications(
-                    request.getMissedNotifications() + 1);
+                        // Move current user to end of queue
+                        moveToEnd(request);
 
-            // Remove after 3 misses
-            if (request.getMissedNotifications() >= 3) {
+                        // Notify next user
+                        notifyNextUser(
+                                        request.getParkingId(),
+                                        request.getVehicleType(),
+                                        request.getBookingDate());
+                }
+        }
 
-                waitlistRepository.delete(request);
+        private void reorderQueue(
+                        String parkingId,
+                        String vehicleType,
+                        LocalDate bookingDate) {
+
+                List<WaitlistRequest> queue = waitlistRepository
+                                .findByParkingIdAndVehicleTypeAndBookingDateOrderByQueuePositionAsc(
+                                                parkingId,
+                                                vehicleType,
+                                                bookingDate);
+
+                int position = 1;
+
+                for (WaitlistRequest item : queue) {
+
+                        item.setQueuePosition(position++);
+
+                        waitlistRepository.save(item);
+                }
+        }
+
+        private void moveToEnd(WaitlistRequest request) {
+
+                List<WaitlistRequest> queue = waitlistRepository
+                                .findByParkingIdAndVehicleTypeAndBookingDateOrderByQueuePositionAsc(
+                                                request.getParkingId(),
+                                                request.getVehicleType(),
+                                                request.getBookingDate());
+
+                int maxPosition = queue.stream()
+                                .mapToInt(WaitlistRequest::getQueuePosition)
+                                .max()
+                                .orElse(0);
+
+                request.setQueuePosition(maxPosition + 1);
+
+                request.setNotified(false);
+
+                request.setNotificationTime(null);
+
+                waitlistRepository.save(request);
 
                 reorderQueue(
-                        request.getParkingId(),
-                        request.getVehicleType(),
-                        request.getBookingDate());
-
-                continue;
-            }
-
-            // Move current user to end of queue
-            moveToEnd(request);
-
-            // Notify next user
-            notifyNextUser(
-                    request.getParkingId(),
-                    request.getVehicleType(),
-                    request.getBookingDate());
+                                request.getParkingId(),
+                                request.getVehicleType(),
+                                request.getBookingDate());
         }
-    }
-
-    private void reorderQueue(
-            String parkingId,
-            String vehicleType,
-            LocalDate bookingDate) {
-
-        List<WaitlistRequest> queue = waitlistRepository
-                .findByParkingIdAndVehicleTypeAndBookingDateOrderByQueuePositionAsc(
-                        parkingId,
-                        vehicleType,
-                        bookingDate);
-
-        int position = 1;
-
-        for (WaitlistRequest item : queue) {
-
-            item.setQueuePosition(position++);
-
-            waitlistRepository.save(item);
-        }
-    }
-
-    private void moveToEnd(WaitlistRequest request) {
-
-        List<WaitlistRequest> queue = waitlistRepository
-                .findByParkingIdAndVehicleTypeAndBookingDateOrderByQueuePositionAsc(
-                        request.getParkingId(),
-                        request.getVehicleType(),
-                        request.getBookingDate());
-
-        int maxPosition = queue.stream()
-                .mapToInt(WaitlistRequest::getQueuePosition)
-                .max()
-                .orElse(0);
-
-        request.setQueuePosition(maxPosition + 1);
-
-        request.setNotified(false);
-
-        request.setNotificationTime(null);
-
-        waitlistRepository.save(request);
-
-        reorderQueue(
-                request.getParkingId(),
-                request.getVehicleType(),
-                request.getBookingDate());
-    }
 }

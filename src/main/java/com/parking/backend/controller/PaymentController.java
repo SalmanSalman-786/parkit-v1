@@ -5,9 +5,9 @@ import com.parking.backend.model.Booking;
 import com.parking.backend.model.Parking;
 import com.parking.backend.repository.BookingRepository;
 import com.parking.backend.repository.ParkingRepository;
+import com.parking.backend.service.ParkingTariffService;
 import com.parking.backend.service.PaymentService;
 import com.parking.backend.service.WebhookService;
-import com.parking.backend.dto.WebhookResult;
 
 import java.time.LocalDateTime;
 import java.util.Map;
@@ -16,7 +16,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.json.JSONObject;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api/payment")
@@ -28,17 +30,20 @@ public class PaymentController {
         private final BookingRepository bookingRepository;
         private final ParkingRepository parkingRepository;
         private final WebhookService webhookService;
+        private final ParkingTariffService parkingTariffService;
 
         public PaymentController(
                         PaymentService paymentService,
                         BookingRepository bookingRepository,
                         ParkingRepository parkingRepository,
-                        WebhookService webhookService) {
+                        WebhookService webhookService,
+                        ParkingTariffService parkingTariffService) {
 
                 this.paymentService = paymentService;
                 this.bookingRepository = bookingRepository;
                 this.parkingRepository = parkingRepository;
                 this.webhookService = webhookService;
+                this.parkingTariffService = parkingTariffService;
         }
 
         @PostMapping("/create-order")
@@ -67,7 +72,9 @@ public class PaymentController {
                         @RequestHeader(value = "X-Razorpay-Signature", required = false) String signature) {
 
                 if (signature == null || signature.isBlank()) {
-                        throw new RuntimeException("Missing webhook signature");
+                        throw new ResponseStatusException(
+                                        HttpStatus.UNAUTHORIZED,
+                                        "Invalid webhook signature");
                 }
 
                 boolean verified = webhookService.verifyWebhookSignature(
@@ -75,10 +82,12 @@ public class PaymentController {
                                 signature);
 
                 if (!verified) {
-                        throw new RuntimeException("Invalid webhook signature");
+                        throw new ResponseStatusException(
+                                        HttpStatus.BAD_REQUEST,
+                                        "Missing webhook signature");
                 }
 
-                log.info("✅ Razorpay webhook verified");
+                log.info("Razorpay webhook verified.");
 
                 WebhookResult result = webhookService.processWebhook(payload);
 
@@ -159,12 +168,11 @@ public class PaymentController {
                                         .findById(booking.getParkingId())
                                         .orElseThrow();
 
-                        double rate = "TWO_WHEELER".equals(booking.getVehicleType())
-                                        ? parking.getBikeHourlyRate()
-                                        : parking.getCarHourlyRate();
-
-                        amount = Math.ceil(
-                                        minutes / 60.0) * rate;
+                        amount = parkingTariffService.calculatePrice(
+                                        parking.getId(),
+                                        ParkingTariffService.WALKIN,
+                                        booking.getVehicleType(),
+                                        minutes);
 
                 }
 

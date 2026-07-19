@@ -19,11 +19,12 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import jakarta.servlet.http.HttpServletRequest;
 
 import jakarta.validation.Valid;
 
 @RestController
-//@CrossOrigin("*")
+// @CrossOrigin("*")
 @RequestMapping("/api/booking")
 public class BookingController {
 
@@ -39,14 +40,18 @@ public class BookingController {
     // ✅ CREATE BOOKING (USER)
 
     @PostMapping
+
     public Booking bookSlot(
             @Valid @RequestBody Booking booking,
-            Authentication auth) { // User App (booking screen m7)
+            Authentication auth,
+            HttpServletRequest request) { // User App (booking screen m7)
 
         String userId = auth.getName();
         booking.setUserId(userId);
 
-        return bookingService.createBooking(booking);
+        return bookingService.createBooking(
+                booking,
+                getClientIp(request));
     }
 
     // 🚓 ENTRY (GUARD ONLY)
@@ -64,15 +69,20 @@ public class BookingController {
 
     // 🚓 EXIT (GUARD ONLY)
     @PutMapping("/exit/{id}")
-    public Map<String, Object> markExit(@PathVariable String id,
-            Authentication auth) {
+    public Map<String, Object> markExit(
+            @PathVariable String id,
+            Authentication auth,
+            HttpServletRequest request) {
 
         if (!auth.getAuthorities().stream()
                 .anyMatch(a -> a.getAuthority().equals("ROLE_GUARD"))) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Access denied");
         }
 
-        Booking booking = bookingService.markExitAndReturn(id);
+        Booking booking = bookingService.markExitAndReturn(
+                id,
+                auth.getName(),
+                getClientIp(request));
 
         Map<String, Object> res = new HashMap<>();
         res.put("message", "Exit successful");
@@ -146,7 +156,18 @@ public class BookingController {
         return bookingService.getUserBookings(userId);
     }
 
-    // 👤 USER HISTORY (FIXED 🔥)
+    @DeleteMapping("/{bookingId}/hide")
+    public ResponseEntity<String> hideBooking(
+            @PathVariable String bookingId,
+            Authentication authentication) {
+
+        bookingService.hideBookingFromUser(
+                bookingId,
+                authentication.getName());
+
+        return ResponseEntity.ok("Booking removed from history");
+    }
+
     @GetMapping("/user/{userId}/history") // User App (my history m1)
     public List<Booking> getUserHistory(@PathVariable String userId,
             Authentication auth) {
@@ -222,8 +243,10 @@ public class BookingController {
 
     // ❌ CANCEL (SAFE)
     @PutMapping("/cancel/{bookingId}") // User App (my booking m2)
-    public Map<String, Object> cancelBooking(@PathVariable String bookingId,
-            Authentication auth) {
+    public Map<String, Object> cancelBooking(
+            @PathVariable String bookingId,
+            Authentication auth,
+            HttpServletRequest request) {
 
         Booking booking = bookingService.getBookingByBookingId(bookingId);
 
@@ -238,7 +261,9 @@ public class BookingController {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Unauthorized");
         }
 
-        String msg = bookingService.cancelBooking(bookingId);
+        String msg = bookingService.cancelBooking(
+                bookingId,
+                getClientIp(request));
 
         Map<String, Object> res = new HashMap<>();
         res.put("message", msg);
@@ -264,16 +289,21 @@ public class BookingController {
         return bookingService.getNotEntered(parkingId);
     }
 
-    @PostMapping("/walkin/entry") // Guard App (walkin screen m1)
-    public Booking walkinEntry(@RequestBody Map<String, String> req,
-            Authentication auth) {
+    @PostMapping("/walkin/entry")
+    public Booking walkinEntry(
+            @RequestBody Map<String, String> req,
+            Authentication auth,
+            HttpServletRequest request) {
 
         if (!auth.getAuthorities().stream()
                 .anyMatch(a -> a.getAuthority().equals("ROLE_GUARD"))) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Unauthorized");
         }
 
-        return bookingService.createWalkin(req);
+        return bookingService.createWalkin(
+                req,
+                auth.getName(),
+                getClientIp(request));
     }
 
     @GetMapping("/vehicle/{vehicleNumber}")
@@ -312,14 +342,18 @@ public class BookingController {
                 orderId);
     }
 
-    @PutMapping("/entry/vehicle/{vehicleNumber}/{parkingId}") // Guard App (operations m8)
+    @PutMapping("/entry/vehicle/{vehicleNumber}/{parkingId}")
     public String markEntryByVehicle(
             @PathVariable String vehicleNumber,
-            @PathVariable String parkingId) {
+            @PathVariable String parkingId,
+            Authentication auth,
+            HttpServletRequest request) {
 
         return bookingService.markEntryByVehicle(
                 vehicleNumber,
-                parkingId);
+                parkingId,
+                auth.getName(),
+                getClientIp(request));
     }
 
     @PutMapping("/exit/vehicle/{vehicleNumber}")
@@ -405,17 +439,20 @@ public class BookingController {
         return ResponseEntity.ok().build();
     }
 
-    @PutMapping("/exit/vehicle/{vehicleNumber}/{parkingId}/{mode}") // Guard App (operations screen m2 ,m3 , m5)
+    @PutMapping("/exit/vehicle/{vehicleNumber}/{parkingId}/{mode}")
     public Booking markExitByVehicle(
             @PathVariable String vehicleNumber,
             @PathVariable String parkingId,
-            @PathVariable String mode) {
+            @PathVariable String mode,
+            Authentication auth,
+            HttpServletRequest request) {
 
-        return bookingService
-                .markExitByVehicle(
-                        vehicleNumber,
-                        parkingId,
-                        mode);
+        return bookingService.markExitByVehicle(
+                vehicleNumber,
+                parkingId,
+                mode,
+                auth.getName(),
+                getClientIp(request));
     }
 
     @GetMapping("/exit-preview/{vehicleNumber}/{parkingId}") // Guard App (operations screen m1)
@@ -497,5 +534,16 @@ public class BookingController {
         return ResponseEntity.ok(
                 bookingService.getLongStayWalkins(
                         parkingId));
+    }
+
+    private String getClientIp(HttpServletRequest request) {
+
+        String forwarded = request.getHeader("X-Forwarded-For");
+
+        if (forwarded != null && !forwarded.isBlank()) {
+            return forwarded.split(",")[0].trim();
+        }
+
+        return request.getRemoteAddr();
     }
 }

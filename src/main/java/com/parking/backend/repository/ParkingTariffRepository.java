@@ -25,5 +25,6 @@ public interface ParkingTariffRepository extends JpaRepository<ParkingTariff, St
         @Modifying
         @Transactional
         void deleteByParkingId(String parkingId);
+        
 
 }

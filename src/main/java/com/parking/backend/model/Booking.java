@@ -33,7 +33,6 @@ public class Booking {
     private String bookingId;
 
     @NotBlank(message = "Vehicle number is required")
-    @Pattern(regexp = "^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{4}$", message = "Invalid vehicle number")
     private String vehicleNumber;
 
     @Pattern(regexp = "^[0-9]{10}$", message = "Invalid phone number")
@@ -139,6 +138,8 @@ public class Booking {
 
     private boolean reminderSent = false;
 
+    private boolean hiddenFromUser = false;
+
     private boolean startNotificationSent;
 
     private boolean startTimeAlertSent = false;
@@ -148,4 +149,7 @@ public class Booking {
     private boolean expiryAlertSent = false;
 
     private boolean endTimeNotified;
+
+    @Column(name = "payment_link_amount")
+    private Double paymentLinkAmount = 0.0;
 }

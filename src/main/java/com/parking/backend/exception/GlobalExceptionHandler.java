@@ -114,6 +114,7 @@ public class GlobalExceptionHandler {
                         RuntimeException ex) {
 
                 logger.warn("Runtime exception: {}", ex.getMessage());
+                //logger.error("Runtime exception", ex);
 
                 return ResponseEntity
                                 .status(HttpStatus.BAD_REQUEST)

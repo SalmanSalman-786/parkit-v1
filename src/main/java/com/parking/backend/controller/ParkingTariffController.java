@@ -8,10 +8,12 @@ import org.springframework.web.bind.annotation.*;
 import com.parking.backend.model.ParkingTariff;
 import com.parking.backend.service.ParkingTariffService;
 
+import jakarta.servlet.http.HttpServletRequest;
+
 import jakarta.validation.Valid;
 
 @RestController
-//@CrossOrigin("*")
+// @CrossOrigin("*")
 @RequestMapping("/api/tariffs")
 public class ParkingTariffController {
 
@@ -73,15 +75,30 @@ public class ParkingTariffController {
     }
 
     @PostMapping("/bulk")
-public List<ParkingTariff> saveTariffs(
-        @Valid @RequestBody List<ParkingTariff> tariffs,
-        Authentication auth) {
+    public List<ParkingTariff> saveTariffs(
+            @Valid @RequestBody List<ParkingTariff> tariffs,
+            Authentication auth,
+            HttpServletRequest request) {
 
-    if (!auth.getAuthorities().stream()
-            .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"))) {
-        throw new RuntimeException("Unauthorized");
+        if (!auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"))) {
+            throw new RuntimeException("Unauthorized");
+        }
+
+        return parkingTariffService.saveTariffs(
+                tariffs,
+                auth.getName(),
+                getClientIp(request));
     }
 
-    return parkingTariffService.saveTariffs(tariffs);
-}
+    private String getClientIp(HttpServletRequest request) {
+
+        String forwarded = request.getHeader("X-Forwarded-For");
+
+        if (forwarded != null && !forwarded.isBlank()) {
+            return forwarded.split(",")[0].trim();
+        }
+
+        return request.getRemoteAddr();
+    }
 }

@@ -8,14 +8,20 @@ import java.time.LocalDateTime;
 import org.json.JSONObject;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.parking.backend.dto.WebhookPaymentDto;
 import com.parking.backend.dto.WebhookRefundDto;
 import com.parking.backend.dto.WebhookResult;
+import com.parking.backend.model.AuditAction;
+import com.parking.backend.model.AuditActorRole;
 import com.parking.backend.model.Booking;
+import com.parking.backend.model.User;
 import com.parking.backend.repository.BookingRepository;
+import com.parking.backend.repository.UserRepository;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,19 +37,24 @@ public class WebhookService {
 
         private final BookingService bookingService;
         private final BookingRepository bookingRepository;
-
+        private final UserRepository userRepository;
         private final PaymentService paymentService;
+        private final AuditLogService auditLogService;
 
         public WebhookService(
                         BookingService bookingService,
                         BookingRepository bookingRepository,
                         PaymentService paymentService,
-                        SimpMessagingTemplate messagingTemplate) {
+                        SimpMessagingTemplate messagingTemplate,
+                        UserRepository userRepository,
+                        AuditLogService auditLogService) {
 
                 this.bookingService = bookingService;
                 this.bookingRepository = bookingRepository;
                 this.paymentService = paymentService;
                 this.messagingTemplate = messagingTemplate;
+                this.userRepository = userRepository;
+                this.auditLogService = auditLogService;
         }
 
         public boolean verifyWebhookSignature(
@@ -75,7 +86,8 @@ public class WebhookService {
 
                 } catch (Exception e) {
 
-                        throw new RuntimeException(
+                        throw new ResponseStatusException(
+                                        HttpStatus.UNAUTHORIZED,
                                         "Webhook signature verification failed");
                 }
         }
@@ -84,9 +96,8 @@ public class WebhookService {
 
                 JSONObject json = new JSONObject(payload);
 
-                log.info("Webhook Payload:\n{}", json.toString(2));
-
                 String event = json.getString("event");
+                log.debug("Webhook received. Event={}", event);
 
                 switch (event) {
 
@@ -336,6 +347,21 @@ public class WebhookService {
 
                 bookingRepository.save(booking);
 
+                User user = userRepository.findById(booking.getUserId())
+                                .orElse(null);
+
+                auditLogService.log(
+                                booking.getUserId(),
+                                user != null ? user.getUsername() : null,
+                                user != null ? user.getName() : null,
+                                AuditActorRole.USER,
+                                AuditAction.PAYMENT_FAILED,
+                                "BOOKING",
+                                booking.getBookingId(),
+                                "Online payment failed",
+                                "RAZORPAY_WEBHOOK",
+                                false);
+
                 log.info(
                                 "Payment failed for booking {}",
                                 booking.getBookingId());
@@ -396,6 +422,21 @@ public class WebhookService {
                 }
 
                 bookingRepository.save(booking);
+
+                User user = userRepository.findById(booking.getUserId())
+                                .orElse(null);
+
+                auditLogService.log(
+                                booking.getUserId(),
+                                user != null ? user.getUsername() : null,
+                                user != null ? user.getName() : null,
+                                AuditActorRole.USER,
+                                AuditAction.REFUND,
+                                "BOOKING",
+                                booking.getBookingId(),
+                                "Refund processed. Refund ID: " + dto.getRefundId(),
+                                "RAZORPAY_WEBHOOK",
+                                true);
 
                 log.info(
                                 "Refund processed for booking {}",
@@ -481,6 +522,24 @@ public class WebhookService {
                 paymentService.completeExitPayment(
                                 booking,
                                 dto.getPaymentId());
+
+                if (booking.getFineAmount() > 0) {
+
+                        User user = userRepository.findById(booking.getUserId())
+                                        .orElse(null);
+
+                        auditLogService.log(
+                                        booking.getUserId(),
+                                        user != null ? user.getUsername() : null,
+                                        user != null ? user.getName() : null,
+                                        AuditActorRole.USER,
+                                        AuditAction.FINE_PAYMENT,
+                                        "BOOKING",
+                                        booking.getBookingId(),
+                                        "Fine payment successful. Amount: ₹" + booking.getFineAmount(),
+                                        "RAZORPAY_WEBHOOK",
+                                        true);
+                }
 
                 log.info("completeExitPayment finished");
 

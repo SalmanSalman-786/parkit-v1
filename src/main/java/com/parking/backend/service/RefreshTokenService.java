@@ -12,6 +12,9 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 import java.util.Optional;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 @Service
 public class RefreshTokenService {
 
@@ -22,6 +25,9 @@ public class RefreshTokenService {
 
                 this.refreshTokenRepository = refreshTokenRepository;
         }
+
+        private static final Logger log =
+        LoggerFactory.getLogger(RefreshTokenService.class);
 
         public RefreshToken createRefreshToken(
                         String userId) {
@@ -59,6 +65,8 @@ public class RefreshTokenService {
                 return refreshTokenRepository.findByToken(token);
         }
 
+
+        @Transactional
         public void revoke(
                         RefreshToken token) {
 
@@ -67,15 +75,14 @@ public class RefreshTokenService {
                 refreshTokenRepository.save(token);
         }
 
+        @Transactional
         public void deleteToken(String token) {
 
-                System.out.println("🔥 BEFORE DELETE: "
-                                + refreshTokenRepository.count());
+                log.debug("Deleting refresh token.");
 
                 refreshTokenRepository.deleteByToken(token);
 
-                System.out.println("🔥 AFTER DELETE: "
-                                + refreshTokenRepository.count());
+                
         }
 
         @Scheduled(cron = "0 0 2 * * ?")
@@ -87,7 +94,7 @@ public class RefreshTokenService {
 
                 refreshTokenRepository.deleteByRevokedTrue();
 
-                System.out.println("🧹 Refresh tokens cleaned");
+                log.info("Expired and revoked refresh tokens cleaned.");
         }
 
         public void revokeAllUserTokens(String userId) {

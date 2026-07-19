@@ -10,6 +10,9 @@ import com.parking.backend.model.Parking;
 import com.parking.backend.repository.BookingCapacityRepository;
 import com.parking.backend.repository.ParkingRepository;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 @Service
 public class BookingCapacityService {
 
@@ -24,11 +27,19 @@ public class BookingCapacityService {
         this.parkingRepository = parkingRepository;
     }
 
+    private static final Logger log = LoggerFactory.getLogger(BookingCapacityService.class);
+
     @Transactional
     public BookingCapacity getOrCreateCapacity(
             String parkingId,
             LocalDate bookingDate,
             String vehicleType) {
+
+        if (!"TWO_WHEELER".equals(vehicleType)
+                && !"FOUR_WHEELER".equals(vehicleType)) {
+
+            throw new RuntimeException("Invalid vehicle type");
+        }
 
         BookingCapacity existing = bookingCapacityRepository
                 .findByParkingIdAndBookingDateAndVehicleType(
@@ -76,34 +87,35 @@ public class BookingCapacityService {
             LocalDate bookingDate,
             String vehicleType) {
 
+        if (!"TWO_WHEELER".equals(vehicleType)
+                && !"FOUR_WHEELER".equals(vehicleType)) {
+
+            throw new RuntimeException("Invalid vehicle type");
+        }
+
         getOrCreateCapacity(
                 parkingId,
                 bookingDate,
                 vehicleType);
 
-        System.out.println("=== RESERVE SLOT START ===");
-        System.out.println("Parking: " + parkingId);
-        System.out.println("Date: " + bookingDate);
-        System.out.println("Vehicle: " + vehicleType);
-
         BookingCapacity capacity = bookingCapacityRepository
                 .lockCapacity(parkingId, bookingDate, vehicleType)
                 .orElseThrow(() -> new RuntimeException("Booking capacity not found"));
 
-        System.out.println("BookedCount = " + capacity.getBookedCount());
-        System.out.println("Capacity = " + capacity.getBookingCapacity());
+        log.debug(
+                "Reserving slot: parking={}, date={}, vehicleType={}",
+                parkingId,
+                bookingDate,
+                vehicleType);
 
         if (capacity.getBookedCount() >= capacity.getBookingCapacity()) {
             throw new RuntimeException("Booking slots full");
         }
 
-        System.out.println("Incrementing booked count...");
-
         capacity.setBookedCount(
                 capacity.getBookedCount() + 1);
 
-        System.out.println("New BookedCount = " + capacity.getBookedCount());
-        System.out.println("=== RESERVE SLOT SUCCESS ===");
+        
 
         return bookingCapacityRepository.save(capacity);
 

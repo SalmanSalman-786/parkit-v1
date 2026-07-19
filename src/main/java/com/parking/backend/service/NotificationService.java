@@ -23,6 +23,9 @@ import org.springframework.data.domain.Pageable;
 
 import org.springframework.scheduling.annotation.Scheduled;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import lombok.RequiredArgsConstructor;
 
 @Service
@@ -36,6 +39,9 @@ public class NotificationService {
     private final FirebaseNotificationService firebaseNotificationService;
 
     private static final int MAX_NOTIFICATIONS = 100;
+
+    private static final Logger log =
+        LoggerFactory.getLogger(NotificationService.class);
 
     @Transactional
     public void sendAlert(
@@ -171,11 +177,11 @@ public class NotificationService {
     @Transactional
     public void deleteOldNotifications() {
 
-        System.out.println("Notification cleanup started...");
+        log.info("Notification cleanup started.");
 
         long deleted = notificationRepository.deleteByCreatedAtBefore(
                 LocalDateTime.now().minusDays(30));
 
-        System.out.println("Deleted " + deleted + " notifications.");
+        log.info("Deleted {} old notifications.", deleted);
     }
 }

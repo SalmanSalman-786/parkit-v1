@@ -34,7 +34,7 @@ public class FirebaseConfig {
                 FirebaseApp.initializeApp(options);
             }
 
-            System.out.println("🔥 Firebase initialized");
+            
 
         } catch (Exception e) {
 

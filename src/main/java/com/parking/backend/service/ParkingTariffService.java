@@ -7,8 +7,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 import org.springframework.stereotype.Service;
 
+import com.parking.backend.model.AuditAction;
+import com.parking.backend.model.AuditActorRole;
 import com.parking.backend.model.ParkingTariff;
+import com.parking.backend.model.User;
 import com.parking.backend.repository.ParkingTariffRepository;
+import com.parking.backend.repository.UserRepository;
 
 @Service
 public class ParkingTariffService {
@@ -23,9 +27,17 @@ public class ParkingTariffService {
     public static final String DAILY = "DAILY";
 
     private final ParkingTariffRepository parkingTariffRepository;
+    private final UserRepository userRepository;
+    private final AuditLogService auditLogService;
 
-    public ParkingTariffService(ParkingTariffRepository parkingTariffRepository) {
+    public ParkingTariffService(
+            ParkingTariffRepository parkingTariffRepository,
+            UserRepository userRepository,
+            AuditLogService auditLogService) {
+
         this.parkingTariffRepository = parkingTariffRepository;
+        this.userRepository = userRepository;
+        this.auditLogService = auditLogService;
     }
 
     public List<ParkingTariff> getTariffs(
@@ -114,6 +126,7 @@ public class ParkingTariffService {
         throw new RuntimeException("Tariff not configured");
     }
 
+    @Transactional
     public ParkingTariff addTariff(ParkingTariff tariff) {
 
         return parkingTariffRepository.save(tariff);
@@ -126,6 +139,7 @@ public class ParkingTariffService {
                         parkingId);
     }
 
+    @Transactional
     public ParkingTariff updateTariff(
             String id,
             ParkingTariff updated) {
@@ -142,22 +156,43 @@ public class ParkingTariffService {
         return parkingTariffRepository.save(tariff);
     }
 
+    @Transactional
+    
     public void deleteTariff(String id) {
 
         parkingTariffRepository.deleteById(id);
     }
 
-   @Transactional
-public List<ParkingTariff> saveTariffs(List<ParkingTariff> tariffs) {
+    @Transactional
+    public List<ParkingTariff> saveTariffs(
+            List<ParkingTariff> tariffs,
+            String adminId,
+            String ipAddress) {
 
-    if (tariffs.isEmpty()) {
-        throw new RuntimeException("No tariffs to save");
+        if (tariffs.isEmpty()) {
+            throw new RuntimeException("No tariffs to save");
+        }
+
+        String parkingId = tariffs.get(0).getParkingId();
+
+        parkingTariffRepository.deleteByParkingId(parkingId);
+
+        List<ParkingTariff> saved = parkingTariffRepository.saveAll(tariffs);
+        User admin = userRepository.findById(adminId)
+                .orElse(null);
+
+        auditLogService.log(
+                adminId,
+                admin != null ? admin.getUsername() : null,
+                admin != null ? admin.getName() : null,
+                AuditActorRole.ADMIN,
+                AuditAction.TARIFF_CHANGED,
+                "PARKING",
+                parkingId,
+                "Updated " + saved.size() + " tariff(s) for parking",
+                ipAddress,
+                true);
+
+        return saved;
     }
-
-    String parkingId = tariffs.get(0).getParkingId();
-
-    parkingTariffRepository.deleteByParkingId(parkingId);
-
-    return parkingTariffRepository.saveAll(tariffs);
-}
 }

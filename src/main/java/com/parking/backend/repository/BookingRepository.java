@@ -18,6 +18,13 @@ public interface BookingRepository extends JpaRepository<Booking, String> {
 
         List<Booking> findByUserId(String userId);
 
+        List<Booking> findByUserIdAndHiddenFromUserFalseOrderByCreatedAtDesc(
+                        String userId);
+
+        List<Booking> findByUserIdOrderByCreatedAtDesc(String userId);
+
+        List<Booking> findByType(String type);
+
         Optional<Booking> findByBookingId(String bookingId);
 
         List<Booking> findByStatusIn(List<String> statuses);
@@ -30,6 +37,12 @@ public interface BookingRepository extends JpaRepository<Booking, String> {
 
         List<Booking> findByParkingId(String parkingId);
 
+        long countByTypeAndStatus(String type, String status);
+
+        long countByParkingIdAndStatusIn(
+                        String parkingId,
+                        List<String> statuses);
+
         boolean existsByVehicleNumberAndStatusIn(
                         String vehicleNumber,
                         List<String> statuses);
@@ -37,6 +50,10 @@ public interface BookingRepository extends JpaRepository<Booking, String> {
         List<Booking> findByVehicleNumberAndStatus(
                         String vehicleNumber,
                         String status);
+
+        List<Booking> findByTypeAndVehicleNumber(
+                        String type,
+                        String vehicleNumber);
 
         Optional<Booking> findTopByVehicleNumberAndStatusOrderByStartTimeAsc(
                         String vehicleNumber,
@@ -177,11 +194,7 @@ public interface BookingRepository extends JpaRepository<Booking, String> {
                         @Param("id") String id);
 
         Optional<Booking> findByPaymentLinkId(String paymentLinkId);
+
         Optional<Booking> findByFineOrderId(String fineOrderId);
-
-        
-
-
-        
 
 }

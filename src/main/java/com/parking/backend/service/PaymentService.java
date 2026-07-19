@@ -21,11 +21,15 @@ import java.util.List;
 
 import com.razorpay.PaymentLink;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 @Service
 public class PaymentService {
 
         private final BookingRepository bookingRepository;
         private final ParkingRepository parkingRepository;
+        private final ParkingTariffService parkingTariffService;
 
         // 🔥 TEST KEYS
         @Value("${razorpay.key.id}")
@@ -34,13 +38,17 @@ public class PaymentService {
         @Value("${razorpay.key.secret}")
         private String keySecret;
 
-        PaymentService(
+        public PaymentService(
                         BookingRepository bookingRepository,
-                        ParkingRepository parkingRepository) {
+                        ParkingRepository parkingRepository,
+                        ParkingTariffService parkingTariffService) {
 
                 this.bookingRepository = bookingRepository;
                 this.parkingRepository = parkingRepository;
+                this.parkingTariffService = parkingTariffService;
         }
+
+        private static final Logger log = LoggerFactory.getLogger(PaymentService.class);
 
         public String createOrder(String bookingId) { // User App (booking screen m8)
 
@@ -91,7 +99,6 @@ public class PaymentService {
                 try {
 
                         RazorpayClient client = new RazorpayClient(keyId, keySecret);
-                        ;
 
                         JSONObject options = new JSONObject();
 
@@ -157,7 +164,7 @@ public class PaymentService {
 
                 } catch (Exception e) {
 
-                        e.printStackTrace(); // 🔥 ADD THIS
+                        log.error("Refund failed.", e);
 
                         throw new RuntimeException(
                                         "Refund failed: " + e.getMessage());
@@ -295,20 +302,6 @@ public class PaymentService {
                                         .findByBookingId(bookingId)
                                         .orElseThrow(() -> new RuntimeException("Booking not found"));
 
-                        // Reuse existing active payment link
-                        if (booking.getPaymentLinkId() != null
-                                        && "CREATED".equals(booking.getPaymentLinkStatus())
-                                        && booking.getPaymentLinkUrl() != null) {
-
-                                JSONObject response = new JSONObject();
-
-                                response.put("id", booking.getPaymentLinkId());
-                                response.put("short_url", booking.getPaymentLinkUrl());
-                                response.put("status", "created");
-
-                                return response.toString();
-                        }
-
                         double amount = 0;
 
                         double fine = booking.getFineAmount();
@@ -325,11 +318,11 @@ public class PaymentService {
                                                 .findById(booking.getParkingId())
                                                 .orElseThrow();
 
-                                double rate = "TWO_WHEELER".equals(booking.getVehicleType())
-                                                ? parking.getBikeHourlyRate()
-                                                : parking.getCarHourlyRate();
-
-                                amount = Math.ceil(minutes / 60.0) * rate;
+                                amount = parkingTariffService.calculatePrice(
+                                                parking.getId(),
+                                                ParkingTariffService.WALKIN,
+                                                booking.getVehicleType(),
+                                                minutes);
                         }
 
                         double total;
@@ -347,10 +340,28 @@ public class PaymentService {
                                 throw new RuntimeException("Invalid amount");
                         }
 
+                        // Reuse payment link only if the amount has not changed
+                        if (booking.getPaymentLinkId() != null
+                                        && "CREATED".equals(booking.getPaymentLinkStatus())
+                                        && booking.getPaymentLinkUrl() != null
+                                        && booking.getPaymentLinkAmount() != null
+                                        && Double.compare(booking.getPaymentLinkAmount(), total) == 0) {
+
+                                log.debug("Reusing existing payment link for booking {}", bookingId);
+
+                                JSONObject response = new JSONObject();
+
+                                response.put("id", booking.getPaymentLinkId());
+                                response.put("short_url", booking.getPaymentLinkUrl());
+                                response.put("status", "created");
+
+                                return response.toString();
+                        }
+
                         RazorpayClient client = new RazorpayClient(keyId, keySecret);
 
                         JSONObject request = new JSONObject();
-
+                        
                         request.put("amount", (int) (total * 100));
 
                         request.put("currency", "INR");
@@ -371,20 +382,14 @@ public class PaymentService {
 
                         PaymentLink paymentLink = client.paymentLink.create(request);
 
-                        System.out.println("====================================");
-                        System.out.println("PAYMENT LINK CREATED");
-                        System.out.println(paymentLink.toString());
-                        System.out.println("====================================");
+                        log.debug("Payment link created for booking {}", bookingId);
 
-                        booking.setPaymentLinkId(
-                                        paymentLink.get("id"));
-                        booking.setPaymentLinkUrl(
-                                        paymentLink.get("short_url"));
+                        booking.setPaymentLinkId(paymentLink.get("id"));
+                        booking.setPaymentLinkUrl(paymentLink.get("short_url"));
 
                         booking.setPaymentLinkStatus("CREATED");
                         booking.setPaymentLinkReference(reference);
-                        System.out.println("Payment Link ID : " + paymentLink.get("id"));
-                        System.out.println("Short URL       : " + paymentLink.get("short_url"));
+                        booking.setPaymentLinkAmount(total);
 
                         bookingRepository.save(booking);
 
@@ -392,7 +397,7 @@ public class PaymentService {
 
                 } catch (Exception e) {
 
-                        e.printStackTrace();
+                        log.error("Failed to create payment link.", e);
 
                         throw new RuntimeException(
                                         "Failed to create payment link: " + e.getMessage(),

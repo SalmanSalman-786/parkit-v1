@@ -7,6 +7,8 @@ import com.parking.backend.repository.UserRepository;
 import org.springframework.security.core.Authentication;
 import java.util.ArrayList;
 
+import org.springframework.transaction.annotation.Transactional;
+
 import org.springframework.web.bind.annotation.*;
 import jakarta.validation.Valid;
 import java.util.UUID;
@@ -28,6 +30,7 @@ public class UserController {
         this.bookingRepository = bookingRepository;
     }
 
+    @Transactional
     @PostMapping
     public User createUser(@Valid @RequestBody User user) {
         return userRepository.save(user);
@@ -46,6 +49,7 @@ public class UserController {
                 .orElseThrow(() -> new RuntimeException("User not found"));
     }
 
+    @Transactional
     @PutMapping("/add-vehicle/{userId}")
     public User addVehicle(
             @PathVariable String userId,
@@ -72,6 +76,7 @@ public class UserController {
         return userRepository.save(user);
     }
 
+    @Transactional
     @DeleteMapping("/vehicle/{userId}/{vehicleId}")
     public String deleteVehicle(
             @PathVariable String userId,
@@ -81,7 +86,8 @@ public class UserController {
         String loggedInUserId = auth.getName();
 
         if (!loggedInUserId.equals(userId)) {
-            throw new RuntimeException("Unauthorized");
+            throw new org.springframework.security.access.AccessDeniedException(
+        "Unauthorized");
         }
 
         User user = userRepository.findById(userId)

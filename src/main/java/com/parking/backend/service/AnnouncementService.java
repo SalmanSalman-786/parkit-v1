@@ -10,6 +10,7 @@ import com.parking.backend.mapper.AnnouncementMapper;
 import com.parking.backend.model.Announcement;
 import com.parking.backend.repository.AnnouncementRepository;
 
+import org.springframework.transaction.annotation.Transactional;
 import lombok.RequiredArgsConstructor;
 
 @Service
@@ -29,6 +30,7 @@ public class AnnouncementService {
                 .toList();
     }
 
+    @Transactional
     public Announcement createAnnouncement(
             String title,
             String message) {

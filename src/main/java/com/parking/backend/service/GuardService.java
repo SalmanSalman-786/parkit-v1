@@ -29,14 +29,15 @@ public class GuardService {
 
         private final BookingService bookingService;
 
-        GuardService(BookingRepository bookingRepository,UserRepository userRepository, BookingService bookingService, ParkingRepository parkingRepository) {
+        GuardService(BookingRepository bookingRepository, UserRepository userRepository, BookingService bookingService,
+                        ParkingRepository parkingRepository) {
                 this.userRepository = userRepository;
                 this.bookingService = bookingService;
                 this.parkingRepository = parkingRepository;
                 this.bookingRepository = bookingRepository;
         }
 
-        public Map<String, Object> getDashboard(String parkingId) {    // Guard App (monitoring screen m3)
+        public Map<String, Object> getDashboard(String parkingId) { // Guard App (monitoring screen m3)
 
                 List<Booking> bookings = bookingRepository.findByParkingId(parkingId);
 
@@ -74,9 +75,9 @@ public class GuardService {
         }
 
         public Map<String, Object> getCapacity(String parkingId) {
-
-                Parking parking = parkingRepository.findById(parkingId)
-                                .orElseThrow();
+                Parking parking = parkingRepository
+                                .findById(parkingId)
+                                .orElseThrow(() -> new RuntimeException("Parking not found"));
 
                 Map<String, Object> res = new HashMap<>();
 
@@ -99,7 +100,7 @@ public class GuardService {
                 return res;
         }
 
-        public List<Map<String, Object>> getUpcomingArrivals(   // Guard App (monitoring screen m5)
+        public List<Map<String, Object>> getUpcomingArrivals( // Guard App (monitoring screen m5)
                         String parkingId) {
 
                 LocalDateTime now = LocalDateTime.now();
@@ -162,7 +163,7 @@ public class GuardService {
                                 .findByParkingId(parkingId);
         }
 
-        public Map<String, Object> getRevenueStats(     // Guard App (monitoring screen m1)
+        public Map<String, Object> getRevenueStats( // Guard App (monitoring screen m1)
                         String parkingId) {
 
                 List<Booking> bookings = bookingRepository
@@ -223,7 +224,7 @@ public class GuardService {
                 return res;
         }
 
-        public List<Map<String, Object>> getTodayActivity(     // Guard App (monitoring screen m6 + today activity m1) 
+        public List<Map<String, Object>> getTodayActivity( // Guard App (monitoring screen m6 + today activity m1)
                         String parkingId) {
 
                 List<Booking> bookings = bookingRepository
@@ -381,7 +382,7 @@ public class GuardService {
                 return result;
         }
 
-        public Map<String, Object> getRevenueDetails(       // Guard App (revenue details m1)
+        public Map<String, Object> getRevenueDetails( // Guard App (revenue details m1)
                         String parkingId) {
 
                 LocalDate today = LocalDate.now();

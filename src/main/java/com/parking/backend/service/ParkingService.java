@@ -1,13 +1,20 @@
 package com.parking.backend.service;
 
 import com.parking.backend.dto.NearbyParkingResponse;
+import com.parking.backend.model.AuditAction;
+import com.parking.backend.model.AuditActorRole;
 import com.parking.backend.model.Parking;
+import com.parking.backend.model.User;
 import com.parking.backend.repository.ParkingRepository;
+import com.parking.backend.repository.ParkingTariffRepository;
+import com.parking.backend.repository.UserRepository;
 import com.parking.backend.repository.BookingRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.data.domain.PageRequest;
 import java.util.List;
 import java.time.LocalDate;
+
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -23,15 +30,30 @@ public class ParkingService {
 
         private final BookingRepository bookingRepository;
 
+        private final UserRepository userRepository;
+
+        private final ParkingTariffRepository parkingTariffRepository;
+
+        private final AuditLogService auditLogService;
+
         ParkingService(
                         ParkingRepository parkingRepository,
-                        BookingRepository bookingRepository) {
+                        BookingRepository bookingRepository,
+                        UserRepository userRepository,
+                        ParkingTariffRepository parkingTariffRepository,
+                        AuditLogService auditLogService) {
+
                 this.parkingRepository = parkingRepository;
                 this.bookingRepository = bookingRepository;
-
+                this.userRepository = userRepository;
+                this.parkingTariffRepository = parkingTariffRepository;
+                this.auditLogService = auditLogService;
         }
 
-        public Parking addParking(Parking parking) {
+        public Parking addParking(
+                        Parking parking,
+                        String adminId,
+                        String ipAddress) {
 
                 if (parking.getName() == null || parking.getName().isEmpty()) {
                         throw new RuntimeException("Parking name required");
@@ -57,7 +79,24 @@ public class ParkingService {
                                         "Booking window end date cannot be before start date.");
                 }
 
-                return parkingRepository.save(parking);
+                Parking saved = parkingRepository.save(parking);
+
+                User admin = userRepository.findById(adminId)
+                                .orElse(null);
+
+                auditLogService.log(
+                                adminId,
+                                admin != null ? admin.getUsername() : null,
+                                admin != null ? admin.getName() : null,
+                                AuditActorRole.ADMIN,
+                                AuditAction.PARKING_ADDED,
+                                "PARKING",
+                                saved.getId(),
+                                "Parking added: " + saved.getName(),
+                                ipAddress,
+                                true);
+
+                return saved;
         }
 
         public List<Parking> getAllParkings(int page, int size) { // User App (Home m1 + details m1 + map m1 + explorer
@@ -139,7 +178,11 @@ public class ParkingService {
                                 .orElseThrow(() -> new RuntimeException("Parking not found"));
         }
 
-        public Parking updateParking(String id, Parking updated) { // Admin Website (Editparking m2)
+        public Parking updateParking(
+                        String id,
+                        Parking updated,
+                        String adminId,
+                        String ipAddress) { // Admin Website (Editparking m2)
 
                 Parking parking = parkingRepository.findById(id)
                                 .orElseThrow(() -> new RuntimeException("Parking not found"));
@@ -200,11 +243,66 @@ public class ParkingService {
                 parking.setBookingWindowEnd(
                                 updated.getBookingWindowEnd());
 
-                return parkingRepository.save(parking);
+                Parking saved = parkingRepository.save(parking);
+                User admin = userRepository.findById(adminId)
+                                .orElse(null);
+
+                auditLogService.log(
+                                adminId,
+                                admin != null ? admin.getUsername() : null,
+                                admin != null ? admin.getName() : null,
+                                AuditActorRole.ADMIN,
+                                AuditAction.PARKING_UPDATED,
+                                "PARKING",
+                                saved.getId(),
+                                "Parking updated: " + saved.getName(),
+                                ipAddress,
+                                true);
+
+                return saved;
         }
 
-        public void deleteParking(String id) { // Admin Website (parking details m3)
-                parkingRepository.deleteById(id);
+        @Transactional
+        public void deleteParking(
+                        String id,
+                        String adminId,
+                        String ipAddress) { // Admin Website (parking details m3)
+
+                Parking parking = parkingRepository.findById(id)
+                                .orElseThrow(() -> new RuntimeException("Parking not found"));
+
+                long activeBookings = bookingRepository.countByParkingIdAndStatusIn(
+                                id,
+                                List.of(
+                                                "PENDING_PAYMENT",
+                                                "BOOKED",
+                                                "ACTIVE"));
+
+                if (activeBookings > 0) {
+                        throw new RuntimeException(
+                                        "Cannot delete parking because it has active or upcoming bookings.");
+                }
+
+                // Delete all tariffs belonging to this parking
+                parkingTariffRepository.deleteByParkingId(id);
+
+                // Delete the parking
+                parkingRepository.delete(parking);
+
+                User admin = userRepository.findById(adminId)
+                                .orElse(null);
+
+                auditLogService.log(
+                                adminId,
+                                admin != null ? admin.getUsername() : null,
+                                admin != null ? admin.getName() : null,
+                                AuditActorRole.ADMIN,
+                                AuditAction.PARKING_DELETED,
+                                "PARKING",
+                                parking.getId(),
+                                "Parking deleted: " + parking.getName(),
+                                ipAddress,
+                                true);
         }
 
         public String uploadImage(MultipartFile file) {
@@ -232,14 +330,17 @@ public class ParkingService {
 
                         File directory = new File(uploadDir);
 
-                        if (!directory.exists()) {
-                                directory.mkdirs();
+                        if (!directory.exists() && !directory.mkdirs()) {
+                                throw new RuntimeException("Unable to create upload directory");
                         }
+
+                        String originalName = Paths.get(file.getOriginalFilename())
+                                        .getFileName()
+                                        .toString();
 
                         String fileName = System.currentTimeMillis()
                                         + "_"
-                                        + file.getOriginalFilename()
-                                                        .replaceAll("\\s+", "_");
+                                        + originalName.replaceAll("\\s+", "_");
 
                         Path path = Paths.get(uploadDir + fileName);
 
@@ -251,7 +352,10 @@ public class ParkingService {
                         return "/uploads/" + fileName;
 
                 } catch (Exception e) {
-                        throw new RuntimeException("Image upload failed");
+
+                        throw new RuntimeException(
+                                        "Image upload failed",
+                                        e);
                 }
         }
 

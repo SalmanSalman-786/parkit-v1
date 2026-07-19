@@ -9,6 +9,8 @@ import com.parking.backend.repository.UserRepository;
 import com.google.firebase.messaging.FirebaseMessagingException;
 import com.parking.backend.model.User;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
@@ -21,6 +23,8 @@ import org.springframework.scheduling.annotation.Async;
 public class FirebaseNotificationService {
 
         private final UserRepository userRepository;
+
+        private static final Logger log = LoggerFactory.getLogger(FirebaseNotificationService.class);
 
         @Async
         public void sendNotification(
@@ -38,31 +42,31 @@ public class FirebaseNotificationService {
                                                                         .setBody(body)
                                                                         .build())
                                         .build();
-                        System.out.println("FCM Token = " + fcmToken);
+
                         String response = FirebaseMessaging
                                         .getInstance()
                                         .send(message);
 
-                        System.out.println("Firebase Response = " + response);
+                        log.debug("Firebase notification sent successfully.");
 
-                        System.out.println("Notification sent successfully");
+                        log.info("Push notification sent.");
 
                 } catch (FirebaseMessagingException e) {
 
-                        System.out.println("Firebase Error Code = "
-                                        + e.getMessagingErrorCode());
+                        log.error(
+                                        "Firebase error: {}",
+                                        e.getMessagingErrorCode());
 
-                        System.out.println("Firebase Message = "
-                                        + e.getMessage());
-
-                        e.printStackTrace();
+                        log.error(
+                                        "Firebase notification failed.",
+                                        e);
 
                 } catch (Exception e) {
 
-                        System.out.println(
-                                        "Notification failed: " + e.getMessage());
+                        log.error(
+                                        "Notification sending failed.",
+                                        e);
 
-                        e.printStackTrace();
                 }
         }
 
@@ -88,9 +92,9 @@ public class FirebaseNotificationService {
 
                         } catch (Exception e) {
 
-                                System.out.println(
-                                                "Failed to send announcement to user "
-                                                                + user.getId());
+                                log.warn(
+                                                "Failed to send announcement to user {}",
+                                                user.getId());
                         }
                 }
         }

@@ -3,6 +3,8 @@ package com.parking.backend.service;
 import com.parking.backend.dto.CancelPreviewResponse;
 import com.parking.backend.dto.OperationLookupResponse;
 import com.parking.backend.dto.PaymentStatus;
+import com.parking.backend.model.AuditAction;
+import com.parking.backend.model.AuditActorRole;
 import com.parking.backend.model.Booking;
 import com.parking.backend.model.NotificationType;
 import com.parking.backend.model.Parking;
@@ -10,7 +12,6 @@ import com.parking.backend.repository.BookingRepository;
 import com.parking.backend.repository.ParkingRepository;
 import com.parking.backend.repository.UserRepository;
 import com.parking.backend.model.User;
-import com.parking.backend.service.NotificationService;
 
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -42,8 +43,6 @@ public class BookingService {
 
         private final RealtimeService realtimeService;
 
-        private final SmsService smsService;
-
         private final PaymentService paymentService;
 
         private final WaitlistService waitlistService;
@@ -53,6 +52,8 @@ public class BookingService {
         private final ParkingTariffService parkingTariffService;
 
         private final NotificationService notificationService;
+
+        private final AuditLogService auditLogService;
 
         private final Map<String, Object> parkingLocks = new ConcurrentHashMap<>();
 
@@ -64,22 +65,24 @@ public class BookingService {
                         UserRepository userRepository,
                         RealtimeService realtimeService,
                         PaymentService paymentService,
-                        SmsService smsService,
+
                         WaitlistService waitlistService,
                         BookingCapacityService bookingCapacityService,
                         ParkingTariffService parkingTariffService,
-                        NotificationService notificationService) {
+                        NotificationService notificationService,
+                        AuditLogService auditLogService) {
 
                 this.bookingRepository = bookingRepository;
                 this.parkingRepository = parkingRepository;
                 this.userRepository = userRepository;
                 this.realtimeService = realtimeService; // <-- add this
-                this.smsService = smsService;
+
                 this.paymentService = paymentService;
                 this.waitlistService = waitlistService;
                 this.bookingCapacityService = bookingCapacityService;
                 this.parkingTariffService = parkingTariffService;
                 this.notificationService = notificationService;
+                this.auditLogService = auditLogService;
         }
 
         public int getBookingCapacity( // new logic
@@ -412,13 +415,6 @@ public class BookingService {
 
         public void validateBooking(Booking booking) { // User App (booking screen m6)
 
-                System.out.println("========== VALIDATE BOOKING ==========");
-                System.out.println("PARKING ID = " + booking.getParkingId());
-                System.out.println("VEHICLE = " + booking.getVehicleNumber());
-                System.out.println("TYPE = " + booking.getVehicleType());
-                System.out.println("START = " + booking.getStartTime());
-                System.out.println("END = " + booking.getEndTime());
-
                 if (booking.getStartTime() == null ||
                                 booking.getEndTime() == null) {
 
@@ -514,9 +510,12 @@ public class BookingService {
 
                         long occupied = bookedForDate + activeToday;
 
-                        System.out.println("BOOKING DATE = " + current);
-                        System.out.println("CAPACITY = " + capacity);
-                        System.out.println("OCCUPIED = " + occupied);
+                        log.debug(
+                                        "Validating booking: parking={}, vehicle={}, start={}, end={}",
+                                        booking.getParkingId(),
+                                        booking.getVehicleNumber(),
+                                        booking.getStartTime(),
+                                        booking.getEndTime());
 
                         if (occupied >= capacity) {
                                 throw new ResponseStatusException(
@@ -547,7 +546,9 @@ public class BookingService {
         }
 
         @Transactional
-        public Booking createBooking(Booking booking) { // User App (booking screen m7)
+        public Booking createBooking(
+                        Booking booking,
+                        String ipAddress) { // User App (booking screen m7)
 
                 Parking parking = parkingRepository.findById(booking.getParkingId())
                                 .orElseThrow(() -> new RuntimeException("Parking not found"));
@@ -657,6 +658,18 @@ public class BookingService {
 
                 // 💾 SAVE
                 Booking saved = bookingRepository.save(booking);
+
+                auditLogService.log(
+                                saved.getUserId(),
+                                user != null ? user.getUsername() : null,
+                                user != null ? user.getName() : null,
+                                AuditActorRole.USER,
+                                AuditAction.BOOKING_CREATED,
+                                "BOOKING",
+                                saved.getBookingId(),
+                                "Booking created successfully",
+                                ipAddress,
+                                true);
 
                 realtimeService.sendDashboardUpdate("BOOKING_CREATED");
 
@@ -789,6 +802,22 @@ public class BookingService {
 
                 Booking saved = bookingRepository.save(booking);
 
+                User user = userRepository.findById(booking.getUserId())
+                                .orElse(null);
+
+                auditLogService.log(
+                                booking.getUserId(),
+                                user != null ? user.getUsername() : null,
+                                user != null ? user.getName() : null,
+                                AuditActorRole.USER,
+                                AuditAction.PAYMENT_SUCCESS,
+                                "BOOKING",
+                                booking.getBookingId(),
+                                "Online payment successful. Amount: ₹" + booking.getAmount()
+                                                + ", Payment ID: " + paymentId,
+                                "ONLINE",
+                                true);
+
                 log.info(
                                 "Booking {} confirmed successfully",
                                 booking.getBookingId());
@@ -885,6 +914,21 @@ public class BookingService {
 
                         bookingRepository.save(booking);
 
+                        User user = userRepository.findById(booking.getUserId())
+                                        .orElse(null);
+
+                        auditLogService.log(
+                                        booking.getUserId(),
+                                        user != null ? user.getUsername() : null,
+                                        user != null ? user.getName() : null,
+                                        AuditActorRole.USER,
+                                        AuditAction.BOOKING_EXPIRED,
+                                        "BOOKING",
+                                        booking.getBookingId(),
+                                        "Booking expired due to payment timeout",
+                                        "SYSTEM",
+                                        true);
+
                         log.info(
                                         "Booking {} cancelled",
                                         booking.getBookingId());
@@ -895,7 +939,7 @@ public class BookingService {
         @Transactional
         public String markEntry(String bookingId) {
 
-                Booking booking = bookingRepository.findByBookingId(bookingId)
+                Booking booking = bookingRepository.findByBookingIdForUpdate(bookingId)
                                 .orElseThrow(() -> new ResponseStatusException(
                                                 HttpStatus.BAD_REQUEST,
                                                 "Booking not found"));
@@ -954,9 +998,11 @@ public class BookingService {
         }
 
         @Transactional
-        public String markEntryByVehicle( // Guard App (operations m8)
+        public String markEntryByVehicle(
                         String vehicleNumber,
-                        String parkingId) {
+                        String parkingId,
+                        String guardId,
+                        String ipAddress) {
 
                 Booking booking = bookingRepository
                                 .findTopByVehicleNumberAndParkingIdAndStatusInOrderByStartTimeAsc(
@@ -1050,6 +1096,21 @@ public class BookingService {
                         booking.setDepositRefundStatus("SUCCESS");
 
                         bookingRepository.save(booking);
+
+                        User guard = userRepository.findById(guardId)
+                                        .orElse(null);
+
+                        auditLogService.log(
+                                        guardId,
+                                        guard != null ? guard.getUsername() : null,
+                                        guard != null ? guard.getName() : null,
+                                        AuditActorRole.GUARD,
+                                        AuditAction.ENTRY_MARKED,
+                                        "BOOKING",
+                                        booking.getBookingId(),
+                                        "Vehicle entry marked. Vehicle: " + booking.getVehicleNumber(),
+                                        ipAddress,
+                                        true);
                         notificationService.sendAlert(
                                         booking.getUserId(),
                                         "🚗 Vehicle Entered",
@@ -1097,9 +1158,7 @@ public class BookingService {
 
                                 bookingRepository.save(booking);
 
-                                System.out.println(
-                                                "Reminder sent for " +
-                                                                booking.getBookingId());
+                                log.info("Booking reminder sent for {}", booking.getBookingId());
                         }
                 }
         }
@@ -1142,9 +1201,7 @@ public class BookingService {
 
                                 bookingRepository.save(booking);
 
-                                System.out.println(
-                                                "Expiry alert sent for " +
-                                                                booking.getBookingId());
+                                log.info("Expiry alert sent for {}", booking.getBookingId());
                         }
                 }
         }
@@ -1180,9 +1237,7 @@ public class BookingService {
 
                                 bookingRepository.save(booking);
 
-                                System.out.println(
-                                                "Start notification sent for "
-                                                                + booking.getBookingId());
+                                log.info("Start notification sent for {}", booking.getBookingId());
                         }
                 }
         }
@@ -1216,16 +1271,13 @@ public class BookingService {
 
                         notificationService.sendAlert(
                                         booking.getUserId(),
-                                        "⏰ Parking Time Over",
-                                        "You have a 15-minute grace period before fines start.",
+                                        "Parking Time Over",
+                                        "You have a 30-minute grace period before fines start.",
                                         NotificationType.PARKING_TIME_OVER);
 
                         if (booking.getPhoneNumber() != null &&
                                         !booking.getPhoneNumber().isBlank()) {
 
-                                smsService.sendSms(
-                                                booking.getPhoneNumber(),
-                                                "ParkIt: Your parking session has expired. You have a 15-minute grace period before fines begin.");
                         }
 
                         booking.setEndTimeNotified(true);
@@ -1234,7 +1286,7 @@ public class BookingService {
 
                 // Grace period
 
-                int graceMinutes = 15;
+                int graceMinutes = 30;
 
                 LocalDateTime graceEnd = booking.getEndTime()
                                 .plusMinutes(graceMinutes);
@@ -1248,7 +1300,7 @@ public class BookingService {
                                 .toMinutes();
 
                 // ₹10 every 10 minutes
-                long intervals = minutesAfterGrace / 10;
+                long intervals = minutesAfterGrace / 30;
 
                 double newFine = intervals * 10;
 
@@ -1267,11 +1319,6 @@ public class BookingService {
                         if (booking.getPhoneNumber() != null &&
                                         !booking.getPhoneNumber().isBlank()) {
 
-                                smsService.sendSms(
-                                                booking.getPhoneNumber(),
-                                                "ParkIt: Overtime detected for vehicle "
-                                                                + booking.getVehicleNumber()
-                                                                + ". Current fine: ₹" + newFine);
                         }
 
                         notificationService.sendAlert(
@@ -1284,7 +1331,10 @@ public class BookingService {
                 }
         }
 
-        public String cancelBooking(String bookingId) {
+        @Transactional
+        public String cancelBooking(
+                        String bookingId,
+                        String ipAddress) {
 
                 Booking booking = bookingRepository.findByBookingId(bookingId)
                                 .orElseThrow(() -> new RuntimeException("Booking not found"));
@@ -1357,6 +1407,21 @@ public class BookingService {
                                 }
 
                                 bookingRepository.save(booking);
+
+                                User user = userRepository.findById(booking.getUserId())
+                                                .orElse(null);
+
+                                auditLogService.log(
+                                                booking.getUserId(),
+                                                user != null ? user.getUsername() : null,
+                                                user != null ? user.getName() : null,
+                                                AuditActorRole.USER,
+                                                AuditAction.BOOKING_CANCELLED,
+                                                "BOOKING",
+                                                booking.getBookingId(),
+                                                "Booking cancelled by user",
+                                                ipAddress, // we'll improve scheduler/controller IP handling later
+                                                true);
 
                         }
 
@@ -1580,7 +1645,7 @@ public class BookingService {
 
                 LocalDateTime now = LocalDateTime.now();
 
-                int graceMinutes = 15;
+                int graceMinutes = 30;
 
                 List<Map<String, Object>> result = new ArrayList<>();
 
@@ -1789,10 +1854,13 @@ public class BookingService {
         }
 
         @Transactional
-        public Booking markExitAndReturn(String bookingId) {
+        public Booking markExitAndReturn(
+                        String bookingId,
+                        String guardId,
+                        String ipAddress) {
 
                 Booking booking = bookingRepository
-                                .findByBookingId(bookingId)
+                                .findByBookingIdForUpdate(bookingId)
                                 .orElseThrow(() -> new RuntimeException("Booking not found"));
 
                 Parking parking = parkingRepository
@@ -1848,13 +1916,47 @@ public class BookingService {
 
                         Booking saved = bookingRepository.save(booking);
 
-                        if (!"WALKIN".equalsIgnoreCase(saved.getType())) {
+                        User guard = userRepository.findById(guardId)
+                                        .orElse(null);
 
-                                // bookingCapacityService.releaseSlot(
-                                // saved.getParkingId(),
-                                // saved.getStartTime().toLocalDate(),
-                                // saved.getVehicleType());
+                        auditLogService.log(
+                                        guardId,
+                                        guard != null ? guard.getUsername() : null,
+                                        guard != null ? guard.getName() : null,
+                                        AuditActorRole.GUARD,
+                                        AuditAction.EXIT_MARKED,
+                                        "BOOKING",
+                                        saved.getBookingId(),
+                                        "Vehicle exited: " + saved.getVehicleNumber(),
+                                        ipAddress,
+                                        true);
+
+                        if (!"WALKIN".equalsIgnoreCase(saved.getType())) {
                                 releaseBookingCapacity(saved);
+                        }
+
+                        // ✅ ADD THIS HERE
+                        if (saved.getFineAmount() > 0) {
+
+                                notificationService.sendAlert(
+                                                saved.getUserId(),
+                                                "🚗 Exit Completed",
+                                                "Your vehicle has exited successfully.\n"
+                                                                + "Parking Fee: ₹" + saved.getAmount()
+                                                                + "\nLate Fine: ₹" + saved.getFineAmount()
+                                                                + "\nTotal Paid: ₹"
+                                                                + (saved.getAmount() + saved.getFineAmount()),
+                                                NotificationType.EXIT_SUCCESS);
+
+                        } else {
+
+                                notificationService.sendAlert(
+                                                saved.getUserId(),
+                                                "🚗 Exit Completed",
+                                                "Your vehicle has exited successfully.\n"
+                                                                + "Parking Fee: ₹" + saved.getAmount()
+                                                                + "\nTotal Paid: ₹" + saved.getAmount(),
+                                                NotificationType.EXIT_SUCCESS);
                         }
 
                         realtimeService.sendDashboardUpdate("EXIT_MARKED");
@@ -1880,10 +1982,12 @@ public class BookingService {
         }
 
         @Transactional
-        public Booking markExitByVehicle( // Guard App (operations screen m2 ,m3 , m5)
+        public Booking markExitByVehicle(
                         String vehicleNumber,
                         String parkingId,
-                        String paymentMode) {
+                        String paymentMode,
+                        String guardId,
+                        String ipAddress) {
 
                 Booking booking = bookingRepository
                                 .findTopByVehicleNumberAndParkingIdAndStatusInOrderByStartTimeAsc(
@@ -1956,7 +2060,9 @@ public class BookingService {
                 bookingRepository.save(booking);
 
                 return markExitAndReturn(
-                                booking.getBookingId());
+                                booking.getBookingId(),
+                                guardId,
+                                ipAddress);
 
         }
 
@@ -1965,24 +2071,50 @@ public class BookingService {
 
                 Booking booking = bookingRepository
                                 .findTopByVehicleNumberAndStatus(vehicleNumber, "ACTIVE")
-                                .orElseThrow(
-                                                () -> new ResponseStatusException(
-                                                                HttpStatus.BAD_REQUEST,
-                                                                "No active booking found"));
+                                .orElseThrow(() -> new ResponseStatusException(
+                                                HttpStatus.BAD_REQUEST,
+                                                "No active booking found"));
 
-                return markExitAndReturn(booking.getBookingId());
+                return markExitAndReturn(
+                                booking.getBookingId(),
+                                "SYSTEM",
+                                "SYSTEM");
         }
 
         // =====================================
         // WALK-IN METHODS
         // =====================================
 
-        public Booking createWalkin(Map<String, String> req) { // Guard App (walkin screen m1)
+        @Transactional
+        public Booking createWalkin(
+                        Map<String, String> req,
+                        String guardId,
+                        String ipAddress) { // Guard App (walkin screen m1)
 
                 String parkingId = req.get("parkingId");
                 String vehicleType = req.get("vehicleType");
                 String vehicleNumber = req.get("vehicleNumber");
                 String phone = req.get("phoneNumber");
+
+                if (vehicleNumber != null) {
+                        vehicleNumber = vehicleNumber
+                                        .trim()
+                                        .toUpperCase()
+                                        .replace(" ", "")
+                                        .replace("-", "");
+                }
+
+                if (vehicleNumber == null || vehicleNumber.length() < 4 || vehicleNumber.length() > 15) {
+                        throw new ResponseStatusException(
+                                        HttpStatus.BAD_REQUEST,
+                                        "Invalid vehicle number format.");
+                }
+
+                if (!vehicleNumber.matches("^[A-Z0-9]+$")) {
+                        throw new ResponseStatusException(
+                                        HttpStatus.BAD_REQUEST,
+                                        "Invalid vehicle number format.");
+                }
 
                 Object lock = getLock(parkingId);
 
@@ -2045,16 +2177,33 @@ public class BookingService {
 
                                 Booking saved = bookingRepository.save(booking);
 
+                                User guard = userRepository.findById(guardId)
+                                                .orElse(null);
+
+                                auditLogService.log(
+                                                guardId,
+                                                guard != null ? guard.getUsername() : null,
+                                                guard != null ? guard.getName() : null,
+                                                AuditActorRole.GUARD,
+                                                AuditAction.WALKIN_ENTRY,
+                                                "BOOKING",
+                                                saved.getBookingId(),
+                                                "Walk-in vehicle entered: " + saved.getVehicleNumber(),
+                                                ipAddress,
+                                                true);
+
                                 // 🔥 BLOCK CURRENT SLOT ONLY
                                 realtimeService.sendDashboardUpdate("ENTRY_MARKED");
 
                                 return saved;
 
+                        } catch (ResponseStatusException e) {
+                                throw e;
                         } catch (Exception e) {
 
-                                e.printStackTrace();
+                                log.error("Failed to create walk-in booking", e);
 
-                                throw new RuntimeException(e);
+                                throw e;
                         }
                 }
         }
@@ -2211,12 +2360,38 @@ public class BookingService {
                                 List.of("BOOKED", "ACTIVE"));
         }
 
-        public List<Booking> getUserBookings(String userId) { // User App (booking screen m1 + my booking m1)
-                return bookingRepository.findByUserId(userId);
+        public List<Booking> getUserBookings(String userId) {
+                return bookingRepository.findByUserIdOrderByCreatedAtDesc(userId);
+        }
+
+        @Transactional
+        public void hideBookingFromUser(
+                        String bookingId,
+                        String userId) {
+
+                Booking booking = bookingRepository
+                                .findByBookingId(bookingId)
+                                .orElseThrow(() -> new RuntimeException("Booking not found"));
+
+                if (!booking.getUserId().equals(userId)) {
+                        throw new RuntimeException("Unauthorized");
+                }
+
+                if (!booking.getStatus().equals("COMPLETED")
+                                && !booking.getStatus().equals("CANCELLED")) {
+
+                        throw new RuntimeException(
+                                        "Only completed or cancelled bookings can be removed.");
+                }
+
+                booking.setHiddenFromUser(true);
+
+                bookingRepository.save(booking);
         }
 
         public List<Booking> getUserHistory(String userId) {
-                return bookingRepository.findByUserId(userId)
+                return bookingRepository
+                                .findByUserIdAndHiddenFromUserFalseOrderByCreatedAtDesc(userId)
                                 .stream()
                                 .filter(b -> "COMPLETED".equals(b.getStatus()) ||
                                                 "CANCELLED".equals(b.getStatus()))
@@ -2257,6 +2432,12 @@ public class BookingService {
 
                 result.put("amount", booking.getAmount()); // ✅ FIXED
                 result.put("fineAmount", booking.getFineAmount());
+                result.put("finePaid", booking.isFinePaid());
+                result.put("finePaymentMode", booking.getFinePaymentMode());
+
+                result.put("finePaid", booking.isFinePaid());
+                result.put("finePaymentMode", booking.getFinePaymentMode());
+                result.put("paymentStatus", booking.getPaymentStatus());
 
                 result.put("startTime", booking.getStartTime());
                 result.put("entryTime", booking.getEntryTime());
@@ -2273,26 +2454,7 @@ public class BookingService {
 
                 OperationLookupResponse response = new OperationLookupResponse();
 
-                // 1️⃣ BOOKED → ENTRY
-                Booking booked = bookingRepository
-                                .findTopByVehicleNumberAndParkingIdAndStatusInOrderByStartTimeAsc(
-                                                vehicleNumber,
-                                                parkingId,
-                                                List.of("BOOKED"))
-                                .orElse(null);
-
-                if (booked != null) {
-
-                        response.setAction("ENTRY");
-                        response.setVehicleNumber(vehicleNumber);
-                        response.setBookingId(booked.getBookingId());
-                        response.setBookingDetails(
-                                        getBookingDetails(booked.getBookingId()));
-
-                        return response;
-                }
-
-                // 2️⃣ ACTIVE → EXIT
+                // 1️⃣ ACTIVE → EXIT
                 Booking active = bookingRepository
                                 .findTopByVehicleNumberAndParkingIdAndStatusInOrderByStartTimeAsc(
                                                 vehicleNumber,
@@ -2311,13 +2473,46 @@ public class BookingService {
                         return response;
                 }
 
+                // 2️⃣ BOOKED → ENTRY
+                Booking booked = bookingRepository
+                                .findTopByVehicleNumberAndParkingIdAndStatusInOrderByStartTimeAsc(
+                                                vehicleNumber,
+                                                parkingId,
+                                                List.of("BOOKED"))
+                                .orElse(null);
+
+                if (booked != null) {
+
+                        LocalDateTime now = LocalDateTime.now();
+                        LocalDateTime start = booked.getStartTime();
+
+                        if (now.isBefore(start.minusMinutes(30))) {
+                                throw new ResponseStatusException(
+                                                HttpStatus.BAD_REQUEST,
+                                                "Too early for entry");
+                        }
+
+                        if (now.isAfter(start.plusMinutes(30))) {
+                                throw new ResponseStatusException(
+                                                HttpStatus.BAD_REQUEST,
+                                                "Booking expired");
+                        }
+
+                        response.setAction("ENTRY");
+                        response.setVehicleNumber(vehicleNumber);
+                        response.setBookingId(booked.getBookingId());
+                        response.setBookingDetails(
+                                        getBookingDetails(booked.getBookingId()));
+
+                        return response;
+                }
+
                 // 3️⃣ No booking → WALK-IN
                 response.setAction("WALKIN");
                 response.setVehicleNumber(vehicleNumber);
 
                 return response;
         }
-
         // ✅ TOTAL REVENUE
 
         private Object getLock(String parkingId) {
@@ -2343,7 +2538,7 @@ public class BookingService {
                 }
 
                 // 🔔 YOUR EXISTING SEND LOGIC
-                System.out.println("Message to user " + userId + ": " + finalMessage);
+                log.info("Message prepared for user {}", userId);
 
                 // If using WebSocket / Notification service → send here
         }

@@ -11,10 +11,12 @@ import com.parking.backend.repository.UserRepository;
 import com.parking.backend.service.AdminService;
 import com.parking.backend.service.BookingService;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 
 import com.parking.backend.repository.ParkingRepository;
 
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
@@ -26,7 +28,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/admin")
-//@CrossOrigin("*")
+// @CrossOrigin("*")
 public class AdminController {
 
         private final UserRepository userRepository;
@@ -53,27 +55,23 @@ public class AdminController {
 
                 Map<String, Object> result = new HashMap<>();
 
-                long totalUsers = userRepository.findByRole("USER").size();
+                long totalUsers = userRepository.countByRole("USER");
 
-                long totalGuards = userRepository.findByRole("GUARD").size();
+                long totalGuards = userRepository.countByRole("GUARD");
 
                 long totalParkings = parkingRepository.count();
 
-                long activeBookings = bookingRepository.findByTypeAndStatus(
+                long activeBookings = bookingRepository.countByTypeAndStatus(
                                 "BOOKING",
-                                "ACTIVE")
-                                .size();
+                                "ACTIVE");
 
-                long activeWalkins = bookingRepository.findByTypeAndStatus(
+                long activeWalkins = bookingRepository.countByTypeAndStatus(
                                 "WALKIN",
-                                "ACTIVE")
-                                .size();
+                                "ACTIVE");
 
                 LocalDate today = LocalDate.now();
 
                 RevenueSummaryResponse revenue = adminService.getRevenueSummary(today);
-
-                
 
                 result.put("totalUsers", totalUsers);
                 result.put("totalGuards", totalGuards);
@@ -195,10 +193,29 @@ public class AdminController {
                 return "Guard updated";
         }
 
+        @DeleteMapping("/guards/{id}")
+        public String deleteGuard(
+                        @PathVariable String id,
+                        Authentication auth,
+                        HttpServletRequest request) {
+
+                if (!auth.getAuthorities().stream()
+                                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"))) {
+                        throw new RuntimeException("Unauthorized");
+                }
+
+                adminService.deleteGuard(
+                                id,
+                                auth.getName(),
+                                getClientIp(request));
+
+                return "Guard deleted successfully";
+        }
+
         @GetMapping("/walkins") // Admin Website (Walkins m1)
         public List<Map<String, Object>> getWalkins() {
 
-                List<Booking> bookings = bookingRepository.findAll();
+                List<Booking> bookings = bookingRepository.findByType("WALKIN");
 
                 Map<String, Map<String, Object>> grouped = new HashMap<>();
 
@@ -243,12 +260,9 @@ public class AdminController {
         public Map<String, Object> getWalkinDetails(
                         @PathVariable String vehicleNumber) {
 
-                List<Booking> allBookings = bookingRepository.findAll();
-
-                List<Booking> walkins = allBookings.stream()
-                                .filter(b -> "WALKIN".equals(b.getType()))
-                                .filter(b -> vehicleNumber.equals(b.getVehicleNumber()))
-                                .toList();
+                List<Booking> walkins = bookingRepository.findByTypeAndVehicleNumber(
+                                "WALKIN",
+                                vehicleNumber);
 
                 if (walkins.isEmpty()) {
                         throw new RuntimeException("Walk-in not found");
@@ -346,6 +360,17 @@ public class AdminController {
                                                 LocalDateTime.parse(
                                                                 endTime),
                                                 vehicleType);
+        }
+
+        private String getClientIp(HttpServletRequest request) {
+
+                String forwarded = request.getHeader("X-Forwarded-For");
+
+                if (forwarded != null && !forwarded.isBlank()) {
+                        return forwarded.split(",")[0].trim();
+                }
+
+                return request.getRemoteAddr();
         }
 
 }

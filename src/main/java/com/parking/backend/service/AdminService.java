@@ -9,16 +9,21 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.parking.backend.dto.AvailabilitySummaryDto;
 import com.parking.backend.dto.ParkingRevenueDto;
 import com.parking.backend.dto.RevenueSummaryResponse;
 import com.parking.backend.dto.RevenueTransactionDto;
 import com.parking.backend.dto.VehicleSlotDto;
+import com.parking.backend.model.AuditAction;
+import com.parking.backend.model.AuditActorRole;
 import com.parking.backend.model.Booking;
 import com.parking.backend.model.Parking;
+import com.parking.backend.model.User;
 import com.parking.backend.repository.BookingRepository;
 import com.parking.backend.repository.ParkingRepository;
+import com.parking.backend.repository.UserRepository;
 
 @Service
 public class AdminService {
@@ -27,9 +32,20 @@ public class AdminService {
 
         private final ParkingRepository parkingRepository;
 
-        AdminService(BookingRepository bookingRepository, ParkingRepository parkingRepository) {
+        private final UserRepository userRepository;
+
+        private final AuditLogService auditLogService;
+
+        AdminService(
+                        BookingRepository bookingRepository,
+                        ParkingRepository parkingRepository,
+                        UserRepository userRepository,
+                        AuditLogService auditLogService) {
+
                 this.bookingRepository = bookingRepository;
                 this.parkingRepository = parkingRepository;
+                this.userRepository = userRepository;
+                this.auditLogService = auditLogService;
         }
 
         public RevenueSummaryResponse getRevenueSummary(LocalDate date) {
@@ -609,27 +625,16 @@ public class AdminService {
                                 .orElseThrow(() -> new RuntimeException(
                                                 "Parking not found"));
 
-                List<Booking> bookings = bookingRepository.findAll();
+                List<Booking> bookings = bookingRepository.findByParkingIdAndStatusIn(
+                                parkingId,
+                                List.of("BOOKED", "ACTIVE"));
 
                 List<Booking> matching = bookings.stream()
-                                .filter(b -> parkingId.equals(
-                                                b.getParkingId()))
-                                .filter(b -> List.of(
-                                                "BOOKED",
-                                                "ACTIVE")
-                                                .contains(
-                                                                b.getStatus()))
-                                .filter(b -> b.getStartTime()
-                                                .isBefore(endTime)
-                                                &&
-                                                b.getEndTime()
-                                                                .isAfter(startTime))
+                                .filter(b -> b.getStartTime().isBefore(endTime)
+                                                && b.getEndTime().isAfter(startTime))
                                 .filter(b -> vehicleType == null
-                                                ||
-                                                vehicleType.isBlank()
-                                                ||
-                                                vehicleType.equals(
-                                                                b.getVehicleType()))
+                                                || vehicleType.isBlank()
+                                                || vehicleType.equals(b.getVehicleType()))
                                 .toList();
 
                 AvailabilitySummaryDto dto = new AvailabilitySummaryDto();
@@ -704,4 +709,34 @@ public class AdminService {
                 return dto;
         }
 
+        @Transactional
+        public void deleteGuard(
+                        String guardId,
+                        String adminId,
+                        String ipAddress) {
+
+                User guard = userRepository.findById(guardId)
+                                .orElseThrow(() -> new RuntimeException("Guard not found"));
+
+                if (!"GUARD".equals(guard.getRole())) {
+                        throw new RuntimeException("Selected user is not a guard");
+                }
+
+                userRepository.delete(guard);
+
+                User admin = userRepository.findById(adminId)
+                                .orElse(null);
+
+                auditLogService.log(
+                                adminId,
+                                admin != null ? admin.getUsername() : null,
+                                admin != null ? admin.getName() : null,
+                                AuditActorRole.ADMIN,
+                                AuditAction.GUARD_REMOVED,
+                                "USER",
+                                guardId,
+                                "Guard removed: " + guard.getUsername(),
+                                ipAddress,
+                                true);
+        }
 }

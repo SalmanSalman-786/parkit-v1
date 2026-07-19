@@ -17,12 +17,17 @@ import java.util.List;
 public class SecurityConfig {
 
         private final JwtAuthFilter jwtAuthFilter;
+        private final RateLimitFilter rateLimitFilter;
 
         @Value("${cors.allowed-origins}")
         private String allowedOrigins;
 
-        SecurityConfig(JwtAuthFilter jwtAuthFilter) {
+        SecurityConfig(
+                        JwtAuthFilter jwtAuthFilter,
+                        RateLimitFilter rateLimitFilter) {
+
                 this.jwtAuthFilter = jwtAuthFilter;
+                this.rateLimitFilter = rateLimitFilter;
         }
 
         @Bean
@@ -41,6 +46,10 @@ public class SecurityConfig {
 
                                                 // Prevent clickjacking
                                                 .frameOptions(frameOptions -> frameOptions.deny())
+
+                                                .httpStrictTransportSecurity(hsts -> hsts
+                                                                .includeSubDomains(true)
+                                                                .maxAgeInSeconds(31536000))
 
                                                 // Control referrer information
                                                 .referrerPolicy(referrerPolicy -> referrerPolicy
@@ -61,7 +70,20 @@ public class SecurityConfig {
                                                 .requestMatchers("/uploads/**").permitAll()
 
                                                 // 🔓 AUTH APIs
-                                                .requestMatchers("/api/auth/**").permitAll()
+                                                .requestMatchers(
+                                                                "/api/auth/login",
+                                                                "/api/auth/admin/login",
+                                                                "/api/auth/guard/login",
+                                                                "/api/auth/refresh",
+                                                                "/api/auth/logout",
+                                                                "/api/auth/user-exists")
+                                                .permitAll()
+
+                                                .requestMatchers("/api/auth/guard/register")
+                                                .hasRole("ADMIN")
+
+                                                .requestMatchers("/api/auth/admin/register")
+                                                .hasRole("ADMIN")
 
                                                 // 🚓 GUARD ONLY
                                                 .requestMatchers("/api/booking/entry/**",
@@ -126,7 +148,13 @@ public class SecurityConfig {
                                                 .anyRequest().authenticated())
 
                                 // 🔐 JWT FILTER
-                                .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+                                .addFilterBefore(
+                                                rateLimitFilter,
+                                                UsernamePasswordAuthenticationFilter.class)
+
+                                .addFilterBefore(
+                                                jwtAuthFilter,
+                                                UsernamePasswordAuthenticationFilter.class);
 
                 return http.build();
         }
