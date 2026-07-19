@@ -1,14 +1,15 @@
 package com.parking.backend.config;
 
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+
+import org.springframework.context.annotation.Configuration;
+
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.FirebaseOptions;
 
 import jakarta.annotation.PostConstruct;
-
-import org.springframework.context.annotation.Configuration;
-
-import java.io.InputStream;
 
 @Configuration
 public class FirebaseConfig {
@@ -18,27 +19,30 @@ public class FirebaseConfig {
 
         try {
 
-            InputStream serviceAccount =
-                    getClass()
-                    .getClassLoader()
-                    .getResourceAsStream(
-                            "firebase/serviceAccountKey.json");
+            if (!FirebaseApp.getApps().isEmpty()) {
+                return;
+            }
+
+            String firebaseJson = System.getenv("FIREBASE_SERVICE_ACCOUNT_JSON");
+
+            if (firebaseJson == null || firebaseJson.isBlank()) {
+                throw new IllegalStateException(
+                        "FIREBASE_SERVICE_ACCOUNT_JSON environment variable is missing.");
+            }
 
             FirebaseOptions options = FirebaseOptions.builder()
                     .setCredentials(
-                            GoogleCredentials.fromStream(serviceAccount))
+                            GoogleCredentials.fromStream(
+                                    new ByteArrayInputStream(
+                                            firebaseJson.getBytes(StandardCharsets.UTF_8))))
                     .build();
 
-            if (FirebaseApp.getApps().isEmpty()) {
+            FirebaseApp.initializeApp(options);
 
-                FirebaseApp.initializeApp(options);
-            }
-
-            
+            System.out.println("Firebase initialized successfully.");
 
         } catch (Exception e) {
-
-            e.printStackTrace();
+            throw new RuntimeException("Failed to initialize Firebase", e);
         }
     }
 }
