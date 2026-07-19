@@ -83,7 +83,7 @@ public class SecurityConfig {
                                                 .hasRole("ADMIN")
 
                                                 .requestMatchers("/api/auth/admin/register")
-                                                .permitAll()
+                                                .hasRole("ADMIN")
 
                                                 // 🚓 GUARD ONLY
                                                 .requestMatchers("/api/booking/entry/**",
