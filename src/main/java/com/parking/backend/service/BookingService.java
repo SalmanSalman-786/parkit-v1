@@ -17,6 +17,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.http.HttpStatus;
+import java.time.ZoneId;
 
 import java.time.Duration;
 import java.time.LocalDate;
@@ -2482,6 +2483,17 @@ public class BookingService {
                                 .orElse(null);
 
                 if (booked != null) {
+
+                        System.out.println("========== ENTRY DEBUG ==========");
+                        System.out.println("Booking ID : " + booked.getBookingId());
+                        System.out.println("Vehicle    : " + booked.getVehicleNumber());
+                        System.out.println("Start      : " + booked.getStartTime());
+                        System.out.println("Now        : " + LocalDateTime.now());
+                        System.out.println("Zone       : " + ZoneId.systemDefault());
+                        System.out.println("Start-30   : " + booked.getStartTime().minusMinutes(30));
+                        System.out.println("Too Early? : " +
+                                        LocalDateTime.now().isBefore(booked.getStartTime().minusMinutes(30)));
+                        System.out.println("=================================");
 
                         LocalDateTime now = LocalDateTime.now();
                         LocalDateTime start = booked.getStartTime();
