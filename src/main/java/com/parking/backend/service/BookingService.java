@@ -1765,11 +1765,23 @@ public class BookingService {
                         map.put("vehicleNumber", b.getVehicleNumber());
                         map.put("vehicleType", b.getVehicleType());
                         map.put("phoneNumber", phone);
+
                         map.put("startTime", b.getStartTime());
+                        map.put("entryTime", b.getEntryTime()); // null for not-entered
+                        map.put("endTime", b.getEndTime());
+                        map.put("expectedExitTime", b.getEndTime());
+
                         map.put("paymentStatus", b.getPaymentStatus());
+
                         map.put("type", b.getType());
+                        map.put("status", b.getStatus());
+
+                        map.put("parkingName", b.getParkingName());
+
+                        map.put("fineAmount", b.getFineAmount());
 
                         result.add(map);
+
                 }
 
                 return result;
