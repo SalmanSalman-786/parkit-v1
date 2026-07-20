@@ -1937,27 +1937,31 @@ public class BookingService {
                         }
 
                         // ✅ ADD THIS HERE
-                        if (saved.getFineAmount() > 0) {
+                        // Send notification only for app users (not walk-ins)
+                        if (!"WALKIN".equalsIgnoreCase(saved.getType())) {
 
-                                notificationService.sendAlert(
-                                                saved.getUserId(),
-                                                "🚗 Exit Completed",
-                                                "Your vehicle has exited successfully.\n"
-                                                                + "Parking Fee: ₹" + saved.getAmount()
-                                                                + "\nLate Fine: ₹" + saved.getFineAmount()
-                                                                + "\nTotal Paid: ₹"
-                                                                + (saved.getAmount() + saved.getFineAmount()),
-                                                NotificationType.EXIT_SUCCESS);
+                                if (saved.getFineAmount() > 0) {
 
-                        } else {
+                                        notificationService.sendAlert(
+                                                        saved.getUserId(),
+                                                        "🚗 Exit Completed",
+                                                        "Your vehicle has exited successfully.\n"
+                                                                        + "Parking Fee: ₹" + saved.getAmount()
+                                                                        + "\nLate Fine: ₹" + saved.getFineAmount()
+                                                                        + "\nTotal Paid: ₹"
+                                                                        + (saved.getAmount() + saved.getFineAmount()),
+                                                        NotificationType.EXIT_SUCCESS);
 
-                                notificationService.sendAlert(
-                                                saved.getUserId(),
-                                                "🚗 Exit Completed",
-                                                "Your vehicle has exited successfully.\n"
-                                                                + "Parking Fee: ₹" + saved.getAmount()
-                                                                + "\nTotal Paid: ₹" + saved.getAmount(),
-                                                NotificationType.EXIT_SUCCESS);
+                                } else {
+
+                                        notificationService.sendAlert(
+                                                        saved.getUserId(),
+                                                        "🚗 Exit Completed",
+                                                        "Your vehicle has exited successfully.\n"
+                                                                        + "Parking Fee: ₹" + saved.getAmount()
+                                                                        + "\nTotal Paid: ₹" + saved.getAmount(),
+                                                        NotificationType.EXIT_SUCCESS);
+                                }
                         }
 
                         realtimeService.sendDashboardUpdate("EXIT_MARKED");
@@ -2514,7 +2518,6 @@ public class BookingService {
 
                 return response;
         }
-        // ✅ TOTAL REVENUE
 
         private Object getLock(String parkingId) {
                 return parkingLocks.computeIfAbsent(parkingId, k -> new Object());
