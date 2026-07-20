@@ -325,7 +325,8 @@ public class GuardService {
         public List<Map<String, Object>> getInsideVehicles(
                         String parkingId,
                         String vehicleType,
-                        String sourceType) {
+                        String sourceType,
+                        String status) {
 
                 List<Map<String, Object>> result = new ArrayList<>();
 
@@ -334,8 +335,7 @@ public class GuardService {
 
                 for (Booking b : bookings) {
 
-                        // only active vehicles
-                        if (!"ACTIVE".equals(b.getStatus())) {
+                        if (!status.equalsIgnoreCase(b.getStatus())) {
                                 continue;
                         }
 
