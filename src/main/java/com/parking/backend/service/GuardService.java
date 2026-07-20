@@ -381,6 +381,7 @@ public class GuardService {
                         map.put("vehicleType", b.getVehicleType());
                         map.put("phoneNumber", phone);
                         map.put("type", b.getType());
+                        map.put("status", b.getStatus());
                         map.put("entryTime", b.getEntryTime());
                         map.put("startTime", b.getStartTime());
                         map.put("amount", b.getAmount());
