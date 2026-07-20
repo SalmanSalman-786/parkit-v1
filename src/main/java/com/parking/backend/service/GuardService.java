@@ -382,6 +382,7 @@ public class GuardService {
                         map.put("phoneNumber", phone);
                         map.put("type", b.getType());
                         map.put("entryTime", b.getEntryTime());
+                        map.put("startTime", b.getStartTime());
                         map.put("amount", b.getAmount());
                         map.put("fineAmount", b.getFineAmount());
                         map.put("parkingName", b.getParkingName());
