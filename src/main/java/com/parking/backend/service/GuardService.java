@@ -330,16 +330,26 @@ public class GuardService {
 
                 List<Map<String, Object>> result = new ArrayList<>();
 
-                List<Booking> bookings = bookingRepository
-                                .findByParkingId(parkingId);
+                List<Booking> bookings = bookingRepository.findByParkingId(parkingId);
 
                 for (Booking b : bookings) {
 
+                        // Status filter (ACTIVE / BOOKED)
+                        if (!status.equalsIgnoreCase(b.getStatus())) {
+                                continue;
+                        }
+
+                        // Vehicle type filter
+                        if (!vehicleType.equalsIgnoreCase(b.getVehicleType())) {
+                                continue;
+                        }
+
+                        // BOOKING / WALKIN filter
                         if (!sourceType.equalsIgnoreCase(b.getType())) {
                                 continue;
                         }
 
-                        // Show only today's bookings in the BOOKED tab
+                        // Show only today's bookings in BOOKED tab
                         if ("BOOKED".equalsIgnoreCase(status)) {
 
                                 if (b.getStartTime() == null) {
@@ -349,16 +359,6 @@ public class GuardService {
                                 if (!b.getStartTime().toLocalDate().equals(LocalDate.now())) {
                                         continue;
                                 }
-                        }
-
-                        // car / bike filter
-                        if (!vehicleType.equals(b.getVehicleType())) {
-                                continue;
-                        }
-
-                        // BOOKING or WALKIN filter
-                        if (!sourceType.equalsIgnoreCase(b.getType())) {
-                                continue;
                         }
 
                         String phone = b.getPhoneNumber();
