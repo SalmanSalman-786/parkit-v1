@@ -342,7 +342,7 @@ public class WebhookService {
                                         "Payment already handled");
                 }
 
-                booking.setStatus("FAILED");
+                // Keep the booking available for retry
                 booking.setPaymentStatus("FAILED");
 
                 bookingRepository.save(booking);
