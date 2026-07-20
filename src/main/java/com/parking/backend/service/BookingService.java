@@ -1300,7 +1300,7 @@ public class BookingService {
                 long minutesAfterGrace = Duration.between(graceEnd, now)
                                 .toMinutes();
 
-                // ₹10 every 10 minutes
+                
                 long intervals = minutesAfterGrace / 30;
 
                 double newFine = intervals * 10;
@@ -2353,6 +2353,7 @@ public class BookingService {
                         map.put("hoursInside", hours);
                         map.put("parkingName", b.getParkingName());
                         map.put("phoneNumber", phone);
+                        map.put("type", b.getType());
 
                         result.add(map);
                 }
