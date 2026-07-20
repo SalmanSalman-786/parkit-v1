@@ -335,8 +335,20 @@ public class GuardService {
 
                 for (Booking b : bookings) {
 
-                        if (!status.equalsIgnoreCase(b.getStatus())) {
+                        if (!sourceType.equalsIgnoreCase(b.getType())) {
                                 continue;
+                        }
+
+                        // Show only today's bookings in the BOOKED tab
+                        if ("BOOKED".equalsIgnoreCase(status)) {
+
+                                if (b.getStartTime() == null) {
+                                        continue;
+                                }
+
+                                if (!b.getStartTime().toLocalDate().equals(LocalDate.now())) {
+                                        continue;
+                                }
                         }
 
                         // car / bike filter
